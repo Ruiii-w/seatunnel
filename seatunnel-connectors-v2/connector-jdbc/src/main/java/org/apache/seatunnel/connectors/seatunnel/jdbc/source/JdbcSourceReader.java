@@ -61,27 +61,28 @@ public class JdbcSourceReader implements SourceReader<SeaTunnelRow, JdbcSourceSp
     @SuppressWarnings("magicnumber")
     public void pollNext(Collector<SeaTunnelRow> output) throws Exception {
 
-         System.out.println(this.getClass().getProtectionDomain().getCodeSource().getLocation());
-//                synchronized (output.getCheckpointLock()) {
-        JdbcSourceSplit split = splits.poll();
-        if (null != split) {
-            try {
-                inputFormat.open(split);
-                while (!inputFormat.reachedEnd()) {
-                    SeaTunnelRow seaTunnelRow = inputFormat.nextRecord();
-                    output.collect(seaTunnelRow);
+        //
+        // System.out.println(this.getClass().getProtectionDomain().getCodeSource().getLocation());
+        synchronized (output.getCheckpointLock()) {
+            JdbcSourceSplit split = splits.poll();
+            if (null != split) {
+                try {
+                    inputFormat.open(split);
+                    while (!inputFormat.reachedEnd()) {
+                        SeaTunnelRow seaTunnelRow = inputFormat.nextRecord();
+                        output.collect(seaTunnelRow);
+                    }
+                } finally {
+                    inputFormat.close();
                 }
-            } finally {
-                inputFormat.close();
+            } else if (noMoreSplit && splits.isEmpty()) {
+                // signal to the source that we have reached the end of the data.
+                log.info("Closed the bounded jdbc source");
+                context.signalNoMoreElement();
+            } else {
+                Thread.sleep(1000L);
             }
-        } else if (noMoreSplit && splits.isEmpty()) {
-            // signal to the source that we have reached the end of the data.
-            log.info("Closed the bounded jdbc source");
-            context.signalNoMoreElement();
-        } else {
-            Thread.sleep(1000L);
         }
-        //        }
     }
 
     @Override
