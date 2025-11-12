@@ -20,6 +20,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.Reader;
 import java.io.StringWriter;
@@ -139,6 +141,54 @@ public class CopyManagerProxy {
         } else {
             throw new InvocationTargetException(
                     new NoSuchMethodException("No copyOut method found on CopyManager"));
+        }
+    }
+
+    // created by wjr 2025.11.03 - 为 COPY OUT 提供 InputStream（首选 PGCopyInputStream，回退为内存流）
+    public InputStream copyOutAsStream(String sql)
+            throws InvocationTargetException, IllegalAccessException, IOException {
+        try {
+            // 优先尝试使用 PG JDBC 的 PGCopyInputStream（真正流式）
+            Class<?> pgConnInterface = Class.forName("org.postgresql.PGConnection");
+            Class<?> pgCopyInputStreamClazz =
+                    Class.forName("org.postgresql.copy.PGCopyInputStream");
+
+            Object pgConn;
+            if (pgConnInterface.isInstance(this.connection)) {
+                pgConn = this.connection;
+            } else {
+                // 某些驱动实现可能是 BaseConnection，依旧尝试直接传入
+                pgConn = this.connection;
+            }
+
+            try {
+                java.lang.reflect.Constructor<?> ctor =
+                        pgCopyInputStreamClazz.getConstructor(pgConnInterface, String.class);
+                return (InputStream) ctor.newInstance(pgConn, sql);
+            } catch (NoSuchMethodException e) {
+                // 兼容不同驱动实现（比如 BaseConnection）
+                java.lang.reflect.Constructor<?> ctor =
+                        pgCopyInputStreamClazz.getConstructor(this.connectionClazz, String.class);
+                return (InputStream) ctor.newInstance(pgConn, sql);
+            }
+        } catch (ClassNotFoundException | NoSuchMethodException | InstantiationException e) {
+            // PGCopyInputStream 不可用时，回退到一次性拷贝并返回内存流（不具备真正流式特性）
+            if (this.copyOutOutputStreamMethod != null) {
+                java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
+                this.copyOutOutputStreamMethod.invoke(this.copyManager, sql, baos);
+                baos.flush();
+                return new java.io.ByteArrayInputStream(baos.toByteArray());
+            } else if (this.copyOutWriterMethod != null) {
+                java.io.StringWriter writer = new java.io.StringWriter();
+                this.copyOutWriterMethod.invoke(this.copyManager, sql, writer);
+                writer.flush();
+                byte[] bytes = writer.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                return new java.io.ByteArrayInputStream(bytes);
+            } else {
+                throw new InvocationTargetException(
+                        new NoSuchMethodException("No copyOut method found on CopyManager"),
+                        e.getMessage());
+            }
         }
     }
 

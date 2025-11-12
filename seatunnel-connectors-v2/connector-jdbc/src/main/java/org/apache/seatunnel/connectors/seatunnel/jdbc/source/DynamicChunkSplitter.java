@@ -577,12 +577,6 @@ public class DynamicChunkSplitter extends ChunkSplitter {
         }
     }
 
-    // by wjr 2025.10.23
-    //    @Override
-    //    protected String createSplitQuerySQL(JdbcSourceSplit split, TableSchema schema) {
-    //        return createDynamicSplitQuerySQL(split, schema);
-    //    }
-
     // 覆盖：为 COPY 模式生成字面值 SQL（无占位符）
     // by wjr 2025.10.27
     @Override
