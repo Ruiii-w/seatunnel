@@ -1,7 +1,6 @@
 package org.apache.seatunnel.connectors.seatunnel.jdbc.internal.copy;
 
 import org.apache.seatunnel.api.table.catalog.TableSchema;
-import org.apache.seatunnel.api.table.type.RowKind;
 import org.apache.seatunnel.api.table.type.SeaTunnelRow;
 import org.apache.seatunnel.common.exception.CommonErrorCodeDeprecated;
 import org.apache.seatunnel.connectors.seatunnel.jdbc.config.JdbcSourceConfig;
@@ -102,15 +101,20 @@ public final class PgCopyInput implements AutoCloseable {
                     CommonErrorCodeDeprecated.SQL_OPERATION_FAILED,
                     "COPY reader not initialized. Did you call open()?");
         }
+        if (!hasNext) {
+            throw new JdbcConnectorException(
+                    CommonErrorCodeDeprecated.SQL_OPERATION_FAILED,
+                    "No more data available in PG COPY stream");
+        }
 
         SeaTunnelRow row = reader.next();
-        if (row != null) {
-            row.setTableId(tableId);
-            row.setRowKind(RowKind.INSERT);
-            hasNext = reader.hasNext();
-        } else {
+        if (row == null) {
             hasNext = false;
+            throw new JdbcConnectorException(
+                    CommonErrorCodeDeprecated.SQL_OPERATION_FAILED,
+                    "Unexpected end of PG COPY stream");
         }
+        hasNext = reader.hasNext();
         return row;
     }
 

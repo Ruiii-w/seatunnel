@@ -14,12 +14,12 @@ import java.nio.ByteOrder;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayDeque;
-import java.util.Arrays;
 import java.util.Deque;
 
 public final class PgCopyBinaryReader implements PgCopyReader {
-    private static final byte[] SIGNATURE =
-            new byte[] {'P', 'G', 'C', 'O', 'P', 'Y', '\n', (byte) 0xFF, '\r', '\n', 0};
+    private static final byte[] SIGNATURE = {
+        'P', 'G', 'C', 'O', 'P', 'Y', '\n', (byte) 0xFF, '\r', '\n', 0
+    };
     private static final LocalDate EPOCH_DATE = LocalDate.of(2000, 1, 1);
     private static final LocalDateTime EPOCH_DATETIME = LocalDateTime.of(2000, 1, 1, 0, 0);
     private static final int BUFFER_SIZE = 64 * 1024;
@@ -41,26 +41,33 @@ public final class PgCopyBinaryReader implements PgCopyReader {
 
     @Override
     public boolean hasNext() {
+        if (!queue.isEmpty()) {
+            return true;
+        }
+        return !eof;
+    }
+
+    @Override
+    public SeaTunnelRow next() {
         try {
-            if (!queue.isEmpty()) return true;
-            if (eof) return false;
-            fillAndParse();
-            return !queue.isEmpty();
+            if (queue.isEmpty() && !eof) {
+                fillAndParse();
+                while (queue.isEmpty() && !eof) {
+                    fillAndParse();
+                }
+            }
+            return queue.poll();
         } catch (IOException e) {
             throw new JdbcConnectorException(
                     CommonErrorCodeDeprecated.SQL_OPERATION_FAILED, "Binary COPY read failed", e);
         }
     }
 
-    @Override
-    public SeaTunnelRow next() {
-        return queue.poll();
-    }
-
     private void fillAndParse() throws IOException {
         fillBufferBlocking();
         if (!headerParsed) parseHeader();
-        parseRows();
+
+        if (headerParsed) parseRows();
     }
 
     /** 第一次读取 buffer 使用 clear，之后使用 compact，保证 PG COPY 流懒加载生效 */
@@ -77,20 +84,39 @@ public final class PgCopyBinaryReader implements PgCopyReader {
         int bytesRead = stream.read(buffer.array(), pos, len);
         if (bytesRead > 0) {
             buffer.position(pos + bytesRead);
+        } else if (bytesRead == -1) {
+            eof = true;
+        } else {
+            // buffer 满，不用处理
         }
         buffer.flip();
     }
 
     private void parseHeader() {
-        if (buffer.remaining() < SIGNATURE.length + 8) return; // 11 bytes + 4 flags + 4 extlen
-        int savedPos = buffer.position();
-        byte[] sig = new byte[SIGNATURE.length];
-        buffer.get(sig);
-        if (!Arrays.equals(sig, SIGNATURE)) {
-            throw new JdbcConnectorException(
-                    CommonErrorCodeDeprecated.UNSUPPORTED_OPERATION,
-                    "Invalid COPY header signature");
+        if (buffer.remaining() < SIGNATURE.length + 8) {
+            // 不足这些字节，说明头部数据还未完整到达，不能开始解析
+            // 返回上层继续加载 buffer
+            return; // 11 bytes + 4 flags + 4 extlen
         }
+
+        int savedPos = buffer.position();
+
+        //
+        //        byte[] sig = new byte[SIGNATURE.length];
+        //        buffer.get(sig);
+        //        if (!Arrays.equals(sig, SIGNATURE)) {
+        //            throw new JdbcConnectorException(
+        //                    CommonErrorCodeDeprecated.UNSUPPORTED_OPERATION,
+        //                    "Invalid COPY header signature");
+        //        }
+        for (byte b : SIGNATURE) {
+            if (buffer.get() != b) {
+                throw new JdbcConnectorException(
+                        CommonErrorCodeDeprecated.UNSUPPORTED_OPERATION,
+                        "Invalid COPY header signature");
+            }
+        }
+
         buffer.getInt(); // flags
         int extLen = buffer.getInt();
         if (extLen > 0) {
@@ -137,10 +163,15 @@ public final class PgCopyBinaryReader implements PgCopyReader {
                 continue;
             }
             if (buffer.remaining() < len) return false;
-            byte[] data = new byte[len];
-            buffer.get(data);
+            int startPos = buffer.position();
+
+            ByteBuffer fieldBuf = buffer.duplicate().order(ByteOrder.BIG_ENDIAN);
+            fieldBuf.limit(startPos + len);
+            fieldBuf.position(startPos);
             values[i] =
-                    PgCopyUtils.parseBinaryField(data, fieldTypes[i], EPOCH_DATE, EPOCH_DATETIME);
+                    PgCopyUtils.parseBinaryField(
+                            fieldBuf, fieldTypes[i], EPOCH_DATE, EPOCH_DATETIME);
+            buffer.position(startPos + len);
         }
         return true;
     }

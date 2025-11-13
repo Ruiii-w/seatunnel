@@ -85,6 +85,62 @@ public final class PgCopyUtils {
         }
     }
 
+    public static Object parseBinaryField(
+            ByteBuffer buf,
+            SeaTunnelDataType<?> type,
+            LocalDate epochDate,
+            LocalDateTime epochDateTime) {
+        try {
+            switch (type.getSqlType()) {
+                case STRING:
+                    if (buf.hasArray()) {
+                        return new String(buf.array(), buf.position(), buf.remaining());
+                    } else {
+                        return java.nio.charset.StandardCharsets.UTF_8
+                                .decode(buf.slice())
+                                .toString();
+                    }
+                case BOOLEAN:
+                    return buf.get() != 0;
+                case TINYINT:
+                    return buf.get();
+                case SMALLINT:
+                    return buf.getShort();
+                case INT:
+                    return buf.getInt();
+                case BIGINT:
+                    return buf.getLong();
+                case FLOAT:
+                    return buf.getFloat();
+                case DOUBLE:
+                    return buf.getDouble();
+                case DECIMAL:
+                    return PgNumericDecoder.decode(buf.slice());
+                case DATE:
+                    return epochDate.plusDays(buf.getInt());
+                case TIME:
+                    return java.time.LocalTime.ofNanoOfDay(buf.getLong() * 1000L);
+                case TIMESTAMP:
+                    return epochDateTime.plusNanos(buf.getLong() * 1000L);
+                case BYTES:
+                    {
+                        byte[] out = new byte[buf.remaining()];
+                        buf.get(out);
+                        return out;
+                    }
+                default:
+                    throw new JdbcConnectorException(
+                            CommonErrorCodeDeprecated.UNSUPPORTED_DATA_TYPE,
+                            "Unsupported binary type: " + type);
+            }
+        } catch (Exception e) {
+            throw new JdbcConnectorException(
+                    CommonErrorCodeDeprecated.UNSUPPORTED_DATA_TYPE,
+                    "Failed to parse binary field for type: " + type,
+                    e);
+        }
+    }
+
     public static Object parseValue(String raw, SeaTunnelDataType<?> type) {
         if (raw == null || raw.isEmpty() || "\\N".equals(raw)) {
             return null;

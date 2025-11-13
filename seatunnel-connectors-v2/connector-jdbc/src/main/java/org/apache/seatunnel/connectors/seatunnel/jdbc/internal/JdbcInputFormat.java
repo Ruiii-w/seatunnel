@@ -154,9 +154,11 @@ public class JdbcInputFormat implements Serializable {
         try {
             if (useCopyStatement) {
                 // PG COPY 模式
-                SeaTunnelRow row = pgCopyInput.next();
+                SeaTunnelRow seaTunnelRow = pgCopyInput.next();
+                seaTunnelRow.setTableId(splitTableId);
+                seaTunnelRow.setRowKind(RowKind.INSERT);
                 hasNext = pgCopyInput.hasNext();
-                return row;
+                return seaTunnelRow;
             } else {
                 SeaTunnelRow seaTunnelRow =
                         jdbcDialect.getRowConverter().toInternal(resultSet, splitTableSchema);
