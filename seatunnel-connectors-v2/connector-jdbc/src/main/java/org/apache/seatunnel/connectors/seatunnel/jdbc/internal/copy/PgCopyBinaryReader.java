@@ -18,17 +18,26 @@ import java.util.Deque;
 
 public final class PgCopyBinaryReader implements PgCopyReader {
     private static final byte[] SIGNATURE = {
-        'P', 'G', 'C', 'O', 'P', 'Y', '\n', (byte) 0xFF, '\r', '\n', 0
+            'P', 'G', 'C', 'O', 'P', 'Y', '\n', (byte) 0xFF, '\r', '\n', 0
     };
     private static final LocalDate EPOCH_DATE = LocalDate.of(2000, 1, 1);
     private static final LocalDateTime EPOCH_DATETIME = LocalDateTime.of(2000, 1, 1, 0, 0);
     private static final int BUFFER_SIZE = 64 * 1024;
+    private static final int MAX_BUFFER_SIZE = 16 * 1024 * 1024; // upper bound to prevent unbounded growth
 
     private final InputStream stream;
     private final SeaTunnelRowType rowType;
     private final SeaTunnelDataType<?>[] fieldTypes;
-    private final ByteBuffer buffer = ByteBuffer.allocate(BUFFER_SIZE).order(ByteOrder.BIG_ENDIAN);
+    // main read buffer (big-endian as per PG COPY binary format)
+    private ByteBuffer buffer = ByteBuffer.allocate(BUFFER_SIZE).order(ByteOrder.BIG_ENDIAN);
+    // parsed rows waiting to be consumed by upper layer
     private final Deque<SeaTunnelRow> queue = new ArrayDeque<>();
+
+    // state for an in-progress row when data spans multiple fills
+    private int pendingFields = -1; // -1 means no active row
+    private Object[] pendingValues; // holds field values for the active row
+    private int pendingIndex = 0;   // next field index to parse
+    private int pendingFieldLen = -1; // current field length; -1 means length not read yet
 
     private boolean headerParsed = false;
     private boolean eof = false;
@@ -65,9 +74,11 @@ public final class PgCopyBinaryReader implements PgCopyReader {
 
     private void fillAndParse() throws IOException {
         fillBufferBlocking();
-        if (!headerParsed) parseHeader();
+        if (!headerParsed)
+            parseHeader();
 
-        if (headerParsed) parseRows();
+        if (headerParsed)
+            parseRows();
     }
 
     /** 第一次读取 buffer 使用 clear，之后使用 compact，保证 PG COPY 流懒加载生效 */
@@ -92,6 +103,32 @@ public final class PgCopyBinaryReader implements PgCopyReader {
         buffer.flip();
     }
 
+    // ensure the buffer has capacity for the upcoming contiguous read (single field payload)
+    private void ensureCapacityFor(int required) {
+        if (required <= buffer.capacity())
+            return;
+        if (required > MAX_BUFFER_SIZE) {
+            throw new JdbcConnectorException(
+                    CommonErrorCodeDeprecated.UNSUPPORTED_OPERATION,
+                    "COPY buffer expansion exceeds max limit: required=" + required
+                            + ", max=" + MAX_BUFFER_SIZE);
+        }
+        int unread = buffer.remaining();
+        int newCap = buffer.capacity();
+        while (newCap < required && newCap < MAX_BUFFER_SIZE) newCap = newCap << 1;
+        if (newCap < required) {
+            throw new JdbcConnectorException(
+                    CommonErrorCodeDeprecated.UNSUPPORTED_OPERATION,
+                    "Unable to expand buffer to required size: required=" + required
+                            + ", max=" + MAX_BUFFER_SIZE);
+        }
+        ByteBuffer newBuf = ByteBuffer.allocate(newCap).order(ByteOrder.BIG_ENDIAN);
+        // copy unread bytes to the start of the new buffer to preserve parser state
+        newBuf.put(buffer.array(), buffer.position(), unread);
+        newBuf.flip();
+        buffer = newBuf;
+    }
+
     private void parseHeader() {
         if (buffer.remaining() < SIGNATURE.length + 8) {
             // 不足这些字节，说明头部数据还未完整到达，不能开始解析
@@ -101,14 +138,6 @@ public final class PgCopyBinaryReader implements PgCopyReader {
 
         int savedPos = buffer.position();
 
-        //
-        //        byte[] sig = new byte[SIGNATURE.length];
-        //        buffer.get(sig);
-        //        if (!Arrays.equals(sig, SIGNATURE)) {
-        //            throw new JdbcConnectorException(
-        //                    CommonErrorCodeDeprecated.UNSUPPORTED_OPERATION,
-        //                    "Invalid COPY header signature");
-        //        }
         for (byte b : SIGNATURE) {
             if (buffer.get() != b) {
                 throw new JdbcConnectorException(
@@ -129,28 +158,71 @@ public final class PgCopyBinaryReader implements PgCopyReader {
         headerParsed = true;
     }
 
+    // parse as many rows as possible from the buffer; keep state across fills
     private void parseRows() {
-        while (buffer.remaining() >= 2) {
-            int start = buffer.position();
-            short fields = buffer.getShort();
-
-            if (fields == -1) { // EOF marker
-                eof = true;
-                return;
+        while (true) {
+            // start a new row when there is no active one
+            if (pendingFields < 0) {
+                if (buffer.remaining() < 2)
+                    return; // need row header (short fields)
+                short fields = buffer.getShort();
+                if (fields == -1) { // EOF marker
+                    eof = true;
+                    return;
+                }
+                if (fields != rowType.getTotalFields()) {
+                    throw new JdbcConnectorException(
+                            CommonErrorCodeDeprecated.UNSUPPORTED_OPERATION,
+                            "Column count mismatch: " + fields);
+                }
+                pendingFields = fields;
+                pendingValues = new Object[fields];
+                pendingIndex = 0;
+                pendingFieldLen = -1;
             }
 
-            if (fields != rowType.getTotalFields()) {
-                throw new JdbcConnectorException(
-                        CommonErrorCodeDeprecated.UNSUPPORTED_OPERATION,
-                        "Column count mismatch: " + fields);
+            // parse fields of the active row; may pause if data is incomplete
+            while (pendingIndex < pendingFields) {
+                // read the length prefix for the current field
+                if (pendingFieldLen < 0) {
+                    if (buffer.remaining() < 4) return; // need 4 bytes length
+                    pendingFieldLen = buffer.getInt();
+                }
+                // -1 denotes NULL field
+                if (pendingFieldLen == -1) {
+                    pendingValues[pendingIndex++] = null;
+                    pendingFieldLen = -1;
+                    continue;
+                }
+                // expand buffer if the upcoming field payload exceeds capacity
+                ensureCapacityFor(pendingFieldLen);
+                // if payload not fully in buffer yet, wait for next fill
+                if (buffer.remaining() < pendingFieldLen)
+                    return;
+
+                int startPos = buffer.position();
+                ByteBuffer fieldBuf = buffer.duplicate().order(ByteOrder.BIG_ENDIAN);
+                fieldBuf.limit(startPos + pendingFieldLen);
+                fieldBuf.position(startPos);
+                pendingValues[pendingIndex] =
+                        PgCopyUtils.parseBinaryField(
+                                fieldBuf,
+                                fieldTypes[pendingIndex],
+                                EPOCH_DATE,
+                                EPOCH_DATETIME);
+                buffer.position(startPos + pendingFieldLen);
+                pendingIndex++;
+                pendingFieldLen = -1;
             }
 
-            Object[] values = new Object[fields];
-            if (!parseFields(values, fields)) {
-                buffer.position(start);
-                return;
-            }
-            queue.add(new SeaTunnelRow(values));
+            // row complete; enqueue and reset state for next row
+            queue.add(new SeaTunnelRow(pendingValues));
+            pendingFields = -1;
+            pendingValues = null;
+            pendingIndex = 0;
+            pendingFieldLen = -1;
+            if (buffer.remaining() < 2)
+                return; // need at least next row header
         }
     }
 
