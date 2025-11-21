@@ -85,7 +85,7 @@ public final class PgCopyInput implements AutoCloseable {
 
     private PgCopyReader createReader(InputStream stream) throws Exception {
         if (useBinary) {
-            return new PgCopyBinaryReader(stream, tableSchema);
+            return new PgCopyBinaryReader(stream, tableSchema, config.getPgCopyBufferSize());
         } else {
             return new PgCopyCsvReader(stream, tableSchema);
         }

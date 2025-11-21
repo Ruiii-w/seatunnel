@@ -65,7 +65,7 @@ Worker节点的JVM参数在`$SEATUNNEL_HOME/config/jvm_worker_options`文件中�
 
 ## 4. 配置 SeaTunnel Engine
 
-SeaTunnel Engine 提供许多功能，需要在 `seatunnel.yaml` 中进行配置。.
+SeaTunnel Engine 提供许多功能，需要在 `seatunnel.yaml` 中进行配置。
 
 ### 4.1 Imap中数据的备份数设置（该参数在Worker节点无效）
 

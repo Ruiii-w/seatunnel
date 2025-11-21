@@ -11,93 +11,64 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
-import java.nio.channels.Channels;
-import java.nio.channels.ReadableByteChannel;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayDeque;
 import java.util.Deque;
-import java.util.concurrent.ArrayBlockingQueue;
-import java.util.concurrent.BlockingQueue;
 
 public final class PgCopyBinaryReader implements PgCopyReader {
     private static final byte[] SIGNATURE = {
-            'P', 'G', 'C', 'O', 'P', 'Y', '\n', (byte) 0xFF, '\r', '\n', 0
+        'P', 'G', 'C', 'O', 'P', 'Y', '\n', (byte) 0xFF, '\r', '\n', 0
     };
     private static final LocalDate EPOCH_DATE = LocalDate.of(2000, 1, 1);
     private static final LocalDateTime EPOCH_DATETIME = LocalDateTime.of(2000, 1, 1, 0, 0);
-    private static final int BUFFER_SIZE = 64 * 1024;
-    private static final int MAX_BUFFER_SIZE = 16 * 1024 * 1024;
-    private static final int FIELD_BUFFER_INIT_SIZE = 4 * 1024;
-    private static final int BUFFER_POOL_SIZE = 10;
 
-    // 直接缓冲区池
-    private static final BlockingQueue<ByteBuffer> bufferPool = new ArrayBlockingQueue<>(BUFFER_POOL_SIZE);
+    private static final int DEFAULT_BUFFER_SIZE = 64 * 1024;
+    //    private static final int MAX_BUFFER_SIZE =
+    //            BUFFER_SIZE * 1024; // upper bound to prevent unbounded growth
+    //    // main read buffer (big-endian as per PG COPY binary format)
+    //    private ByteBuffer buffer = ByteBuffer.allocate(BUFFER_SIZE).order(ByteOrder.BIG_ENDIAN);
 
-    static {
-        // 预分配直接缓冲区
-        for (int i = 0; i < BUFFER_POOL_SIZE; i++) {
-            bufferPool.offer(ByteBuffer.allocateDirect(BUFFER_SIZE).order(ByteOrder.BIG_ENDIAN));
-        }
-    }
+    private static int BUFFER_SIZE;
+    private static int MAX_BUFFER_SIZE; // upper bound to prevent unbounded growth
+    private ByteBuffer buffer;
 
     private final InputStream stream;
-    private final ReadableByteChannel channel;
     private final SeaTunnelRowType rowType;
     private final SeaTunnelDataType<?>[] fieldTypes;
 
-    // 使用直接缓冲区
-    private ByteBuffer buffer;
+    // parsed rows waiting to be consumed by upper layer
     private final Deque<SeaTunnelRow> queue = new ArrayDeque<>();
 
-    // 可复用的字段解析缓冲区
-    private ByteBuffer fieldBuffer = ByteBuffer.allocateDirect(FIELD_BUFFER_INIT_SIZE).order(ByteOrder.BIG_ENDIAN);
-
-    // 解析状态
-    private int pendingFields = -1;
-    private Object[] pendingValues;
-    private int pendingIndex = 0;
-    private int pendingFieldLen = -1;
+    // state for an in-progress row when data spans multiple fills
+    private int pendingFields = -1; // -1 means no active row
+    private Object[] pendingValues; // holds field values for the active row
+    private int pendingIndex = 0; // next field index to parse
+    private int pendingFieldLen = -1; // current field length; -1 means length not read yet
 
     private boolean headerParsed = false;
     private boolean eof = false;
-    private boolean bufferFromPool = false;
 
-    public PgCopyBinaryReader(InputStream stream, TableSchema schema) {
+    //    public PgCopyBinaryReader(InputStream stream, TableSchema schema) {
+    //        this.stream = stream;
+    //        this.rowType = schema.toPhysicalRowDataType();
+    //        this.fieldTypes = rowType.getFieldTypes();
+    //    }
+
+    public PgCopyBinaryReader(InputStream stream, TableSchema schema, Integer pgCopyBufferSize) {
         this.stream = stream;
-        this.channel = Channels.newChannel(stream);
         this.rowType = schema.toPhysicalRowDataType();
         this.fieldTypes = rowType.getFieldTypes();
-
-        // 从池中获取缓冲区，如果没有则创建新的直接缓冲区
-        this.buffer = acquireBuffer();
-        this.bufferFromPool = true;
-    }
-
-    /**
-     * 从缓冲区池获取直接缓冲区
-     */
-    private ByteBuffer acquireBuffer() {
-        ByteBuffer buffer = bufferPool.poll();
-        if (buffer != null) {
-            buffer.clear();
-            return buffer;
-        }
-        // 池为空时创建新的直接缓冲区
-        return ByteBuffer.allocateDirect(BUFFER_SIZE).order(ByteOrder.BIG_ENDIAN);
-    }
-
-    /**
-     * 释放缓冲区回池中
-     */
-    private void releaseBuffer(ByteBuffer buffer) {
-        if (buffer != null && buffer.isDirect()) {
-            // 如果缓冲区太大，不回收以避免内存浪费
-            if (buffer.capacity() <= BUFFER_SIZE * 4) {
-                buffer.clear();
-                bufferPool.offer(buffer);
-            }
-        }
+        BUFFER_SIZE =
+                pgCopyBufferSize == null
+                        ? DEFAULT_BUFFER_SIZE
+                        : 1
+                                << (32
+                                        - Integer.numberOfLeadingZeros(
+                                                pgCopyBufferSize
+                                                        - 1)); // 大于等于 pgCopyBufferSize 的最小的 2 的幂
+        MAX_BUFFER_SIZE = BUFFER_SIZE * 1024;
+        this.buffer = ByteBuffer.allocate(BUFFER_SIZE).order(ByteOrder.BIG_ENDIAN);
     }
 
     @Override
@@ -126,16 +97,12 @@ public final class PgCopyBinaryReader implements PgCopyReader {
 
     private void fillAndParse() throws IOException {
         fillBufferBlocking();
-        if (!headerParsed)
-            parseHeader();
+        if (!headerParsed) parseHeader();
 
-        if (headerParsed)
-            parseRows();
+        if (headerParsed) parseRows();
     }
 
-    /**
-     * 使用通道读取，避免数组拷贝
-     */
+    /** 第一次读取 buffer 使用 clear，之后使用 compact，保证 PG COPY 流懒加载生效 */
     private void fillBufferBlocking() throws IOException {
         boolean initial = buffer.position() == 0 && buffer.limit() == buffer.capacity();
         if (initial) {
@@ -144,90 +111,53 @@ public final class PgCopyBinaryReader implements PgCopyReader {
             buffer.compact();
         }
 
-        // 使用通道读取到直接缓冲区
-        int bytesRead = channel.read(buffer);
-        if (bytesRead == -1) {
-            eof = true;
-        }
-
-        buffer.flip();
-
-        // 如果缓冲区为空且不是初始状态，可能是压缩问题，回退到传统读取方式
-        if (buffer.remaining() == 0 && !initial && !eof) {
-            readUsingTraditionalMethod();
-        }
-    }
-
-    /**
-     * 传统读取方法作为回退方案
-     */
-    private void readUsingTraditionalMethod() throws IOException {
-        buffer.clear();
-        byte[] tempArray = new byte[buffer.remaining()];
-        int bytesRead = stream.read(tempArray);
+        int pos = buffer.position();
+        int len = buffer.capacity() - pos;
+        int bytesRead = stream.read(buffer.array(), pos, len);
         if (bytesRead > 0) {
-            buffer.put(tempArray, 0, bytesRead);
+            buffer.position(pos + bytesRead);
         } else if (bytesRead == -1) {
             eof = true;
+        } else {
+            // buffer 满，不用处理
         }
         buffer.flip();
     }
 
-    /**
-     * 确保缓冲区容量，使用直接缓冲区扩容
-     */
+    // ensure the buffer has capacity for the upcoming contiguous read (single field payload)
     private void ensureCapacityFor(int required) {
-        if (required <= buffer.capacity())
-            return;
+        if (required <= buffer.capacity()) return;
         if (required > MAX_BUFFER_SIZE) {
             throw new JdbcConnectorException(
                     CommonErrorCodeDeprecated.UNSUPPORTED_OPERATION,
-                    "COPY buffer expansion exceeds max limit: required=" + required
-                            + ", max=" + MAX_BUFFER_SIZE);
+                    "COPY buffer expansion exceeds max limit: required="
+                            + required
+                            + ", max="
+                            + MAX_BUFFER_SIZE);
         }
-
-        int newCap = calculateNewCapacity(required);
-        ByteBuffer newBuf = ByteBuffer.allocateDirect(newCap).order(ByteOrder.BIG_ENDIAN);
-
-        // 传输数据到新缓冲区
-        buffer.mark();
-        newBuf.put(buffer);
-        newBuf.flip();
-
-        // 释放旧缓冲区回池
-        if (bufferFromPool) {
-            releaseBuffer(buffer);
-        }
-
-        buffer = newBuf;
-        bufferFromPool = false;
-    }
-
-    private int calculateNewCapacity(int required) {
+        int unread = buffer.remaining();
         int newCap = buffer.capacity();
-        while (newCap < required && newCap < MAX_BUFFER_SIZE) {
-            newCap = Math.min(newCap << 1, MAX_BUFFER_SIZE);
+        while (newCap < required && newCap < MAX_BUFFER_SIZE) newCap = newCap << 1;
+        if (newCap < required) {
+            throw new JdbcConnectorException(
+                    CommonErrorCodeDeprecated.UNSUPPORTED_OPERATION,
+                    "Unable to expand buffer to required size: required="
+                            + required
+                            + ", max="
+                            + MAX_BUFFER_SIZE);
         }
-        return Math.max(newCap, required);
-    }
-
-    /**
-     * 确保字段缓冲区容量
-     */
-    private void ensureFieldBufferCapacity(int required) {
-        if (required <= fieldBuffer.capacity()) {
-            fieldBuffer.clear();
-            return;
-        }
-
-        // 创建新的字段缓冲区
-        ByteBuffer newFieldBuffer = ByteBuffer.allocateDirect(required * 2).order(ByteOrder.BIG_ENDIAN);
-        fieldBuffer = newFieldBuffer;
+        ByteBuffer newBuf = ByteBuffer.allocate(newCap).order(ByteOrder.BIG_ENDIAN);
+        // copy unread bytes to the start of the new buffer to preserve parser state
+        newBuf.put(buffer.array(), buffer.position(), unread);
+        newBuf.flip();
+        buffer = newBuf;
     }
 
     private void parseHeader() {
         if (buffer.remaining() < SIGNATURE.length + 8) {
-            return;
+            // 不足这些字节，说明头部数据还未完整到达，不能开始解析
+            // 返回上层循环加载 buffer
+            return; // 11 bytes + 4 flags + 4 extlen
         }
 
         int savedPos = buffer.position();
@@ -252,16 +182,14 @@ public final class PgCopyBinaryReader implements PgCopyReader {
         headerParsed = true;
     }
 
-    /**
-     * 优化的行解析方法，减少缓冲区拷贝
-     */
+    // parse as many rows as possible from the buffer; keep state across fills
     private void parseRows() {
         while (true) {
+            // start a new row when there is no active one
             if (pendingFields < 0) {
-                if (buffer.remaining() < 2)
-                    return;
+                if (buffer.remaining() < 2) return; // need row header (short fields)
                 short fields = buffer.getShort();
-                if (fields == -1) {
+                if (fields == -1) { // EOF marker
                     eof = true;
                     return;
                 }
@@ -276,58 +204,49 @@ public final class PgCopyBinaryReader implements PgCopyReader {
                 pendingFieldLen = -1;
             }
 
+            // parse fields of the active row; may pause if data is incomplete
             while (pendingIndex < pendingFields) {
+                // read the length prefix for the current field
                 if (pendingFieldLen < 0) {
-                    if (buffer.remaining() < 4) return;
+                    if (buffer.remaining() < 4) return; // need 4 bytes length
                     pendingFieldLen = buffer.getInt();
                 }
-
+                // -1 denotes NULL field
                 if (pendingFieldLen == -1) {
                     pendingValues[pendingIndex++] = null;
                     pendingFieldLen = -1;
                     continue;
                 }
-
+                // expand buffer if the upcoming field payload exceeds capacity
                 ensureCapacityFor(pendingFieldLen);
-                if (buffer.remaining() < pendingFieldLen)
-                    return;
+                // if payload not fully in buffer yet, wait for next fill
+                if (buffer.remaining() < pendingFieldLen) return;
 
-                // 优化：使用可复用的字段缓冲区，避免创建新的ByteBuffer视图
-                ensureFieldBufferCapacity(pendingFieldLen);
+                int startPos = buffer.position();
 
-                // 直接拷贝字段数据到字段缓冲区
-                byte[] fieldData = new byte[pendingFieldLen];
-                buffer.get(fieldData);
-                fieldBuffer.put(fieldData);
-                fieldBuffer.flip();
+                // 创建原buffer的副本（共享底层数据，但独立维护position/limit）
+                ByteBuffer fieldBuf = buffer.duplicate().order(ByteOrder.BIG_ENDIAN);
+                fieldBuf.limit(startPos + pendingFieldLen);
+                fieldBuf.position(startPos);
 
-                try {
-                    pendingValues[pendingIndex] = PgCopyUtils.parseBinaryField(
-                            fieldBuffer,
-                            fieldTypes[pendingIndex],
-                            EPOCH_DATE,
-                            EPOCH_DATETIME);
-                } finally {
-                    fieldBuffer.clear();
-                }
-
+                pendingValues[pendingIndex] =
+                        PgCopyUtils.parseBinaryField(
+                                fieldBuf, fieldTypes[pendingIndex], EPOCH_DATE, EPOCH_DATETIME);
+                buffer.position(startPos + pendingFieldLen);
                 pendingIndex++;
                 pendingFieldLen = -1;
             }
 
+            // row complete; enqueue and reset state for next row
             queue.add(new SeaTunnelRow(pendingValues));
             pendingFields = -1;
             pendingValues = null;
             pendingIndex = 0;
             pendingFieldLen = -1;
-            if (buffer.remaining() < 2)
-                return;
+            if (buffer.remaining() < 2) return; // need at least next row header
         }
     }
 
-    /**
-     * 传统字段解析方法（保留作为参考）
-     */
     private boolean parseFields(Object[] values, int fields) {
         for (int i = 0; i < fields; i++) {
             if (buffer.remaining() < 4) return false;
@@ -337,54 +256,41 @@ public final class PgCopyBinaryReader implements PgCopyReader {
                 continue;
             }
             if (buffer.remaining() < len) return false;
+            int startPos = buffer.position();
 
-            ensureFieldBufferCapacity(len);
-            byte[] fieldData = new byte[len];
-            buffer.get(fieldData);
-            fieldBuffer.put(fieldData);
-            fieldBuffer.flip();
-
-            try {
-                values[i] = PgCopyUtils.parseBinaryField(
-                        fieldBuffer, fieldTypes[i], EPOCH_DATE, EPOCH_DATETIME);
-            } finally {
-                fieldBuffer.clear();
-            }
+            ByteBuffer fieldBuf = buffer.duplicate().order(ByteOrder.BIG_ENDIAN);
+            fieldBuf.limit(startPos + len);
+            fieldBuf.position(startPos);
+            values[i] =
+                    PgCopyUtils.parseBinaryField(
+                            fieldBuf, fieldTypes[i], EPOCH_DATE, EPOCH_DATETIME);
+            buffer.position(startPos + len);
         }
         return true;
     }
 
     @Override
     public void close() throws IOException {
+        IOException closeException = null;
+
         try {
-            // 释放缓冲区回池
-            if (bufferFromPool) {
-                releaseBuffer(buffer);
+            if (stream != null) {
+                stream.close();
             }
-
-            // 清理字段缓冲区
-            if (fieldBuffer != null && fieldBuffer.isDirect()) {
-                // 小缓冲区直接释放，大缓冲区不回收
-                if (fieldBuffer.capacity() <= FIELD_BUFFER_INIT_SIZE * 4) {
-                    // 直接缓冲区的清理由GC处理
-                }
-            }
+        } catch (IOException e) {
+            closeException = e;
         } finally {
-            stream.close();
+            // 清理资源
+            buffer = null;
+            queue.clear();
+            pendingValues = null;
+            pendingFields = -1;
+            pendingIndex = 0;
+            pendingFieldLen = -1;
         }
-    }
 
-    /**
-     * 静态工具方法：清理缓冲区池
-     */
-    public static void cleanupBufferPool() {
-        bufferPool.clear();
-    }
-
-    /**
-     * 获取缓冲区池状态（用于监控）
-     */
-    public static int getBufferPoolSize() {
-        return bufferPool.size();
+        if (closeException != null) {
+            throw new IOException("Failed to close PgCopyBinaryReader", closeException);
+        }
     }
 }

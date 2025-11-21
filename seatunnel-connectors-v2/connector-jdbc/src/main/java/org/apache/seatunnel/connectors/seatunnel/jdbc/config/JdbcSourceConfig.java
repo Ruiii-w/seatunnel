@@ -50,6 +50,9 @@ public class JdbcSourceConfig implements Serializable {
     // created by wjr 2025.10.28
     private boolean binary;
 
+    // created by wjr 2025.11.14
+    private Integer pgCopyBufferSize;
+
     public static JdbcSourceConfig of(ReadonlyConfig config) {
         JdbcSourceConfig.Builder builder = JdbcSourceConfig.builder();
         builder.jdbcConnectionConfig(JdbcConnectionConfig.of(config));
@@ -78,6 +81,9 @@ public class JdbcSourceConfig implements Serializable {
 
         // created by wjr 2025.10.28
         builder.binary(config.get(JdbcSourceOptions.BINARY));
+
+        // created by wjr 2025.11.14
+        builder.pgCopyBufferSize(config.get(JdbcSourceOptions.PG_COPY_ROW_SIZE));
 
         config.getOptional(JdbcSourceOptions.WHERE_CONDITION)
                 .ifPresent(

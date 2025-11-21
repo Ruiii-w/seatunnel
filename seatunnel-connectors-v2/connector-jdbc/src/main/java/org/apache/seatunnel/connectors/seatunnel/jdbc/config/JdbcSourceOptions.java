@@ -113,4 +113,11 @@ public interface JdbcSourceOptions {
                     .defaultValue(false)
                     .withDescription(
                             "Use PostgreSQL COPY BINARY format when use_copy_statement is true");
+
+    Option<Integer> PG_COPY_ROW_SIZE =
+            Options.key("row_size")
+                    .intType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The Estimated row size for PostgreSQL COPY. This is only supported for PostgreSQL.");
 }

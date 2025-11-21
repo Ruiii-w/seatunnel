@@ -60,8 +60,6 @@ public class JdbcSourceReader implements SourceReader<SeaTunnelRow, JdbcSourceSp
     @Override
     @SuppressWarnings("magicnumber")
     public void pollNext(Collector<SeaTunnelRow> output) throws Exception {
-
-        //
         // System.out.println(this.getClass().getProtectionDomain().getCodeSource().getLocation());
         synchronized (output.getCheckpointLock()) {
             JdbcSourceSplit split = splits.poll();
