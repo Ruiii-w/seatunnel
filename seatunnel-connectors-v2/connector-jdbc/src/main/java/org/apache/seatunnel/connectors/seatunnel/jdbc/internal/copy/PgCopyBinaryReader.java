@@ -20,6 +20,7 @@ public final class PgCopyBinaryReader implements PgCopyReader {
     private static final byte[] SIGNATURE = {
         'P', 'G', 'C', 'O', 'P', 'Y', '\n', (byte) 0xFF, '\r', '\n', 0
     };
+
     private static final LocalDate EPOCH_DATE = LocalDate.of(2000, 1, 1);
     private static final LocalDateTime EPOCH_DATETIME = LocalDateTime.of(2000, 1, 1, 0, 0);
 

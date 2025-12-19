@@ -133,7 +133,8 @@ public abstract class ChunkSplitter implements AutoCloseable, Serializable {
 
     // by wjr 2025.10.23
     protected String createSplitQuerySQL(JdbcSourceSplit split, TableSchema schema) {
-        throw new UnsupportedOperationException("Not implemented");
+        //        throw new UnsupportedOperationException("Not implemented");
+        return split.getTablePath().toString();
     }
 
     // by wjr 2025.10.23

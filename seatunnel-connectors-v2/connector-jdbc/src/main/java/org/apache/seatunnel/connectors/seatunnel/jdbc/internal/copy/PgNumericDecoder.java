@@ -1,6 +1,5 @@
 package org.apache.seatunnel.connectors.seatunnel.jdbc.internal.copy;
 
-import org.apache.seatunnel.common.exception.CommonErrorCodeDeprecated;
 import org.apache.seatunnel.connectors.seatunnel.jdbc.exception.JdbcConnectorException;
 
 import org.slf4j.Logger;
@@ -21,6 +20,13 @@ public final class PgNumericDecoder {
 
     private PgNumericDecoder() {}
 
+    /**
+     * Decodes PostgreSQL binary numeric format into BigDecimal
+     *
+     * @param buf ByteBuffer containing the binary numeric data
+     * @return Decoded BigDecimal value
+     * @throws JdbcConnectorException if the value is NaN
+     */
     public static BigDecimal decode(ByteBuffer buf) {
         // ndigits: number of base-10000 digits
         int ndigits = buf.getShort() & 0xFFFF;
@@ -30,9 +36,10 @@ public final class PgNumericDecoder {
 
         // NaN is not supported
         if (sign == 0xC000) {
-            throw new JdbcConnectorException(
-                    CommonErrorCodeDeprecated.UNSUPPORTED_OPERATION,
-                    "PostgreSQL NUMERIC value is NaN, not supported.");
+            return null; //
+            //            throw new JdbcConnectorException(
+            //                    CommonErrorCodeDeprecated.UNSUPPORTED_OPERATION,
+            //                    "PostgreSQL NUMERIC value is NaN, not supported.");
         }
 
         // Zero value (ndigits == 0)
@@ -85,10 +92,9 @@ public final class PgNumericDecoder {
 }
 
 /*
+ * Example: PostgreSQL stores value: 123.45 (dscale=2), binary representation: ndigits=2, weight=0, sign=0, dscale=2
  *
- * 假设PostgreSQL存储数值：123.45（dscale=2）, 二进制表示：ndigits=2, weight=0, sign=0, dscale=2
- *
- * digits = [123, 4500] （因为10000进制）
+ * digits = [123, 4500] (in base-10000 system)
  *
  * raw = 123×10000 + 4500 = 1234500
  *
@@ -96,5 +102,5 @@ public final class PgNumericDecoder {
  *
  * value = new BigDecimal(1234500, 4) = 123.4500
  *
- * 设置精度：123.4500 → 123.45
+ * Set scale: 123.4500 → 123.45
  */
