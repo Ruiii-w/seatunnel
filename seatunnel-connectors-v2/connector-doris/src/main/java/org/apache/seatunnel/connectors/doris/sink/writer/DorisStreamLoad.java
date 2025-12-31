@@ -101,7 +101,8 @@ public class DorisStreamLoad implements Serializable {
         this.loadUrlStr = String.format(LOAD_URL_PATTERN, hostPort, db, table);
         this.abortUrlStr = String.format(ABORT_URL_PATTERN, hostPort, db);
         this.enable2PC = dorisConfig.getEnable2PC();
-        this.streamLoadProp = dorisConfig.getStreamLoadProps();
+        this.streamLoadProp = new Properties();
+        this.streamLoadProp.putAll(dorisConfig.getStreamLoadProps());
         this.enableDelete = dorisConfig.getEnableDelete();
         this.httpClient = httpClient;
         this.executorService =
@@ -116,7 +117,32 @@ public class DorisStreamLoad implements Serializable {
                 new RecordStream(dorisConfig.getBufferSize(), dorisConfig.getBufferCount());
         lineDelimiter =
                 streamLoadProp.getProperty(LINE_DELIMITER_KEY, LINE_DELIMITER_DEFAULT).getBytes();
+        escapeProperties(streamLoadProp);
         loadBatchFirstRecord = true;
+    }
+
+    static void escapeProperties(Properties properties) {
+        if (properties.containsKey(LINE_DELIMITER_KEY)) {
+            String lineDelimiter = properties.getProperty(LINE_DELIMITER_KEY);
+            properties.setProperty(LINE_DELIMITER_KEY, escapeString(lineDelimiter));
+        }
+        if (properties.containsKey(LoadConstants.FIELD_DELIMITER_KEY)) {
+            String fieldDelimiter = properties.getProperty(LoadConstants.FIELD_DELIMITER_KEY);
+            properties.setProperty(LoadConstants.FIELD_DELIMITER_KEY, escapeString(fieldDelimiter));
+        }
+    }
+
+    static String escapeString(String s) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (Character.isISOControl(c) || c > 126) {
+                sb.append(String.format("\\x%02x", (int) c));
+            } else {
+                sb.append(c);
+            }
+        }
+        return sb.toString();
     }
 
     public void abortPreCommit(String labelSuffix, long chkID) throws Exception {

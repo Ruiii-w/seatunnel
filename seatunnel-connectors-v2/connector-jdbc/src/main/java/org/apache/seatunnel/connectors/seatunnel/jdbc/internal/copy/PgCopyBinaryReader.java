@@ -24,7 +24,7 @@ public final class PgCopyBinaryReader implements PgCopyReader {
     private static final LocalDate EPOCH_DATE = LocalDate.of(2000, 1, 1);
     private static final LocalDateTime EPOCH_DATETIME = LocalDateTime.of(2000, 1, 1, 0, 0);
 
-    private static final int DEFAULT_BUFFER_SIZE = 64 * 1024;
+    private static final int DEFAULT_BUFFER_SIZE = 1024 * 1024;
     //    private static final int MAX_BUFFER_SIZE =
     //            BUFFER_SIZE * 1024; // upper bound to prevent unbounded growth
     //    // main read buffer (big-endian as per PG COPY binary format)

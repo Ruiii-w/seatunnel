@@ -33,7 +33,7 @@ public interface JdbcOptions {
     Option<String> URL = Options.key("url").stringType().noDefaultValue().withDescription("url");
 
     Option<String> DRIVER =
-            Options.key("driver").stringType().noDefaultValue().withDescription("driver");
+               Options.key("driver").stringType().noDefaultValue().withDescription("driver");
 
     Option<Integer> CONNECTION_CHECK_TIMEOUT_SEC =
             Options.key("connection_check_timeout_sec")
