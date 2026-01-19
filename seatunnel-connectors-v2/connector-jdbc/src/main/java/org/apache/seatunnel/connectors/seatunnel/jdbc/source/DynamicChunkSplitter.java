@@ -116,22 +116,7 @@ public class DynamicChunkSplitter extends ChunkSplitter {
 
         int chunkSize = config.getSplitSize();
 
-        switch (splitColumnType.getSqlType()) {
-            case TINYINT:
-            case SMALLINT:
-            case INT:
-            case BIGINT:
-            case DECIMAL:
-            case DOUBLE:
-            case FLOAT:
-            case STRING:
-                return evenlyColumnSplitChunks(table, splitColumnName, min, max, chunkSize);
-            case DATE:
-                return dateColumnSplitChunks(table, splitColumnName, min, max, chunkSize);
-            default:
-                throw CommonError.unsupportedDataType(
-                        "JDBC", splitColumnType.getSqlType().toString(), splitColumnName);
-        }
+        c
     }
 
     private List<ChunkRange> evenlyColumnSplitChunks(

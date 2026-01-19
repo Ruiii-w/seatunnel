@@ -301,7 +301,7 @@ public class EsRestClient implements Closeable {
         Map<String, String> param = new HashMap<>();
         param.put("scroll_id", scrollId);
         param.put("scroll", scrollTime);
-        return getDocsFromScrollRequest("/_search/scroll", JsonUtils.toJsonString(param));
+        return getDocsFromScrollRequest("   /_search/scroll", JsonUtils.toJsonString(param));
     }
 
     private ScrollResult getDocsFromScrollRequest(String endpoint, String requestBody) {

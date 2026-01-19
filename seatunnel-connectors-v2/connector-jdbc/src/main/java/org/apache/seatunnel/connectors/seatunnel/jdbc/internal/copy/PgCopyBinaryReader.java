@@ -7,6 +7,9 @@ import org.apache.seatunnel.api.table.type.SeaTunnelRowType;
 import org.apache.seatunnel.common.exception.CommonErrorCodeDeprecated;
 import org.apache.seatunnel.connectors.seatunnel.jdbc.exception.JdbcConnectorException;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
@@ -17,6 +20,46 @@ import java.util.ArrayDeque;
 import java.util.Deque;
 
 public final class PgCopyBinaryReader implements PgCopyReader {
+    private static final Logger LOG = LoggerFactory.getLogger(PgCopyBinaryReader.class);
+    /**
+     * Per-stream metrics for PostgreSQL COPY (binary) parsing. Tracks cumulative bytes read (B),
+     * rows parsed (rows), and buffer expansion count (times). Provides derived throughput metrics
+     * (rows/s, bytes/s) based on elapsed time since creation.
+     */
+    private static final class Metrics {
+        private long bytesReadTotal;
+        private long rowsParsedTotal;
+        private long bufferExpansionCount;
+        private final long startTimeNanos = System.nanoTime();
+
+        void addBytesRead(int n) {
+            if (n > 0) bytesReadTotal += n;
+        }
+
+        void incRowsParsed() {
+            rowsParsedTotal++;
+        }
+
+        void incExpansion() {
+            bufferExpansionCount++;
+        }
+
+        long getElapsedMillis() {
+            return (System.nanoTime() - startTimeNanos) / 1_000_000L;
+        }
+
+        double getRowsPerSecond() {
+            long elapsed = System.nanoTime() - startTimeNanos;
+            return elapsed <= 0 ? 0.0 : rowsParsedTotal * 1_000_000_000.0 / elapsed;
+        }
+
+        double getBytesPerSecond() {
+            long elapsed = System.nanoTime() - startTimeNanos;
+            return elapsed <= 0 ? 0.0 : bytesReadTotal * 1_000_000_000.0 / elapsed;
+        }
+    }
+
+    private final Metrics metrics = new Metrics();
     private static final byte[] SIGNATURE = {
         'P', 'G', 'C', 'O', 'P', 'Y', '\n', (byte) 0xFF, '\r', '\n', 0
     };
@@ -24,7 +67,7 @@ public final class PgCopyBinaryReader implements PgCopyReader {
     private static final LocalDate EPOCH_DATE = LocalDate.of(2000, 1, 1);
     private static final LocalDateTime EPOCH_DATETIME = LocalDateTime.of(2000, 1, 1, 0, 0);
 
-    private static final int DEFAULT_BUFFER_SIZE = 1024 * 1024;
+    private static final int DEFAULT_BUFFER_SIZE = 1 * 1024 * 1024;
     //    private static final int MAX_BUFFER_SIZE =
     //            BUFFER_SIZE * 1024; // upper bound to prevent unbounded growth
     //    // main read buffer (big-endian as per PG COPY binary format)
@@ -56,6 +99,11 @@ public final class PgCopyBinaryReader implements PgCopyReader {
     //        this.fieldTypes = rowType.getFieldTypes();
     //    }
 
+    /**
+     * Constructs a PostgreSQL COPY (binary) reader. Initializes schema-derived row type and field
+     * types, configures the parsing buffer with a power-of-two capacity based on the provided
+     * pgCopyBufferSize.
+     */
     public PgCopyBinaryReader(InputStream stream, TableSchema schema, Integer pgCopyBufferSize) {
         this.stream = stream;
         this.rowType = schema.toPhysicalRowDataType();
@@ -67,11 +115,16 @@ public final class PgCopyBinaryReader implements PgCopyReader {
                                 << (32
                                         - Integer.numberOfLeadingZeros(
                                                 pgCopyBufferSize
-                                                        - 1)); // 大于等于 pgCopyBufferSize 的最小的 2 的幂
+                                                        - 1)); // Smallest power of two greater than
+        // or equal to pgCopyBufferSize
         MAX_BUFFER_SIZE = BUFFER_SIZE * 1024;
         this.buffer = ByteBuffer.allocate(BUFFER_SIZE).order(ByteOrder.BIG_ENDIAN);
     }
 
+    /**
+     * Indicates whether more rows are available to be read. Returns true if the internal queue has
+     * parsed rows or if the stream has not reached EOF.
+     */
     @Override
     public boolean hasNext() {
         if (!queue.isEmpty()) {
@@ -80,6 +133,10 @@ public final class PgCopyBinaryReader implements PgCopyReader {
         return !eof;
     }
 
+    /**
+     * Retrieves the next SeaTunnelRow from the COPY stream. Lazily fills the buffer and parses rows
+     * until one is available or EOF is reached. Throws a JdbcConnectorException on I/O errors.
+     */
     @Override
     public SeaTunnelRow next() {
         try {
@@ -96,6 +153,10 @@ public final class PgCopyBinaryReader implements PgCopyReader {
         }
     }
 
+    /**
+     * Reads more bytes into the parsing buffer and advances parsing. Parses the header once, then
+     * decodes available rows into the internal queue.
+     */
     private void fillAndParse() throws IOException {
         fillBufferBlocking();
         if (!headerParsed) parseHeader();
@@ -103,7 +164,14 @@ public final class PgCopyBinaryReader implements PgCopyReader {
         if (headerParsed) parseRows();
     }
 
-    /** 第一次读取 buffer 使用 clear，之后使用 compact，保证 PG COPY 流懒加载生效 */
+    /**
+     * Reads from the underlying InputStream into the parsing buffer. First invocation uses clear()
+     * to reset position/limit; subsequent invocations use compact() to preserve unread bytes and
+     * append new data. Flips the buffer for read operations and sets EOF when the stream is
+     * exhausted.
+     *
+     * @throws IOException if an I/O error occurs while reading into the buffer
+     */
     private void fillBufferBlocking() throws IOException {
         boolean initial = buffer.position() == 0 && buffer.limit() == buffer.capacity();
         if (initial) {
@@ -117,15 +185,18 @@ public final class PgCopyBinaryReader implements PgCopyReader {
         int bytesRead = stream.read(buffer.array(), pos, len);
         if (bytesRead > 0) {
             buffer.position(pos + bytesRead);
+            metrics.addBytesRead(bytesRead); // accumulate bytes read for throughput computation
         } else if (bytesRead == -1) {
             eof = true;
-        } else {
-            // buffer 满，不用处理
         }
         buffer.flip();
     }
 
-    // ensure the buffer has capacity for the upcoming contiguous read (single field payload)
+    /**
+     * Ensures the buffer capacity is sufficient for a single contiguous field payload. Expands the
+     * buffer up to MAX_BUFFER_SIZE by doubling capacity while preserving unread bytes. Throws if
+     * the required size exceeds MAX_BUFFER_SIZE.
+     */
     private void ensureCapacityFor(int required) {
         if (required <= buffer.capacity()) return;
         if (required > MAX_BUFFER_SIZE) {
@@ -148,17 +219,21 @@ public final class PgCopyBinaryReader implements PgCopyReader {
                             + MAX_BUFFER_SIZE);
         }
         ByteBuffer newBuf = ByteBuffer.allocate(newCap).order(ByteOrder.BIG_ENDIAN);
-        // copy unread bytes to the start of the new buffer to preserve parser state
         newBuf.put(buffer.array(), buffer.position(), unread);
         newBuf.flip();
         buffer = newBuf;
+        metrics.incExpansion(); // track buffer expansion count
     }
 
+    /**
+     * Parses the COPY binary header. Validates the PG signature, consumes flags and optional
+     * extension area. If incomplete, defers parsing by restoring position and returning.
+     */
     private void parseHeader() {
         if (buffer.remaining() < SIGNATURE.length + 8) {
-            // 不足这些字节，说明头部数据还未完整到达，不能开始解析
-            // 返回上层循环加载 buffer
-            return; // 11 bytes + 4 flags + 4 extlen
+            // Insufficient bytes for header; defer parsing until header is fully available
+            // Return and let the upper loop refill the buffer
+            return; // 11-byte signature + 4-byte flags + 4-byte extension length
         }
 
         int savedPos = buffer.position();
@@ -183,7 +258,10 @@ public final class PgCopyBinaryReader implements PgCopyReader {
         headerParsed = true;
     }
 
-    // parse as many rows as possible from the buffer; keep state across fills
+    /**
+     * Incrementally parses rows from the buffer, preserving state across buffer refills. Handles
+     * EOF markers, NULL fields, and variable-length payloads. Enqueues complete rows.
+     */
     private void parseRows() {
         while (true) {
             // start a new row when there is no active one
@@ -225,7 +303,8 @@ public final class PgCopyBinaryReader implements PgCopyReader {
 
                 int startPos = buffer.position();
 
-                // 创建原buffer的副本（共享底层数据，但独立维护position/limit）
+                // Create a duplicate of the underlying buffer (shares backing array, independent
+                // position/limit)
                 ByteBuffer fieldBuf = buffer.duplicate().order(ByteOrder.BIG_ENDIAN);
                 fieldBuf.limit(startPos + pendingFieldLen);
                 fieldBuf.position(startPos);
@@ -240,6 +319,7 @@ public final class PgCopyBinaryReader implements PgCopyReader {
 
             // row complete; enqueue and reset state for next row
             queue.add(new SeaTunnelRow(pendingValues));
+            metrics.incRowsParsed(); // increment parsed rows counter
             pendingFields = -1;
             pendingValues = null;
             pendingIndex = 0;
@@ -248,6 +328,10 @@ public final class PgCopyBinaryReader implements PgCopyReader {
         }
     }
 
+    /**
+     * Helper to parse a fixed number of fields into the provided values array. Returns false if
+     * insufficient bytes are available to complete parsing.
+     */
     private boolean parseFields(Object[] values, int fields) {
         for (int i = 0; i < fields; i++) {
             if (buffer.remaining() < 4) return false;
@@ -270,10 +354,13 @@ public final class PgCopyBinaryReader implements PgCopyReader {
         return true;
     }
 
+    /**
+     * Closes the underlying stream and releases internal resources. Ensures parser state is reset
+     * to avoid memory retention. Propagates I/O exceptions encountered during close.
+     */
     @Override
     public void close() throws IOException {
         IOException closeException = null;
-
         try {
             if (stream != null) {
                 stream.close();
@@ -281,7 +368,14 @@ public final class PgCopyBinaryReader implements PgCopyReader {
         } catch (IOException e) {
             closeException = e;
         } finally {
-            // 清理资源
+            LOG.info(
+                    "PG COPY summary: rows={} rows, bytes={} B, expansions={} times, elapsed={} ms, rows_per_second={} rows/s, bytes_per_second={} B/s",
+                    metrics.rowsParsedTotal,
+                    metrics.bytesReadTotal,
+                    metrics.bufferExpansionCount,
+                    metrics.getElapsedMillis(),
+                    metrics.getRowsPerSecond(),
+                    metrics.getBytesPerSecond());
             buffer = null;
             queue.clear();
             pendingValues = null;
@@ -289,7 +383,6 @@ public final class PgCopyBinaryReader implements PgCopyReader {
             pendingIndex = 0;
             pendingFieldLen = -1;
         }
-
         if (closeException != null) {
             throw new IOException("Failed to close PgCopyBinaryReader", closeException);
         }
