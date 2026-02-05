@@ -47,6 +47,7 @@ public class JdbcSourceSplitEnumerator
     private final ChunkSplitter splitter;
     private final Context<JdbcSourceSplit> context;
     private final Object stateLock = new Object();
+    private volatile boolean shouldErrorOnCheckpoint = false;
 
     public JdbcSourceSplitEnumerator(
             Context<JdbcSourceSplit> context,
@@ -80,6 +81,11 @@ public class JdbcSourceSplitEnumerator
 
                 Collection<JdbcSourceSplit> splits = splitter.generateSplits(tables.get(tablePath));
                 LOG.info("Split table {} into {} splits.", tablePath, splits.size());
+                if (splits.size() == 1) {
+                    this.shouldErrorOnCheckpoint = true;
+                    LOG.warn(
+                            "JDBC Source is running with a single split. If Checkpoint is enabled, the job will fail at the first checkpoint. Please disable Checkpoint or configure partitioning.");
+                }
 
                 int i = 0;
                 for (JdbcSourceSplit s : splits) {
@@ -155,6 +161,11 @@ public class JdbcSourceSplitEnumerator
 
     @Override
     public JdbcSourceState snapshotState(long checkpointId) throws Exception {
+        if (shouldErrorOnCheckpoint) {
+            throw new JdbcConnectorException(
+                    CommonErrorCodeDeprecated.ILLEGAL_ARGUMENT,
+                    "The JDBC source has a single split, which is not recommended when checkpoint is enabled. Please disable checkpoint or configure partitioning for the table.");
+        }
         synchronized (stateLock) {
             return new JdbcSourceState(new ArrayList(pendingTables), new HashMap<>(pendingSplits));
         }
