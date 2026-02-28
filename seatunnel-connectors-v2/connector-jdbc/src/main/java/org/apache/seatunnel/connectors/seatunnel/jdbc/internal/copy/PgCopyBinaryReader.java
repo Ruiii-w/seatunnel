@@ -130,7 +130,19 @@ public final class PgCopyBinaryReader implements PgCopyReader {
         if (!queue.isEmpty()) {
             return true;
         }
-        return !eof;
+        if (eof) {
+            return false;
+        }
+        try {
+            fillAndParse();
+            while (queue.isEmpty() && !eof) {
+                fillAndParse();
+            }
+        } catch (IOException e) {
+            throw new JdbcConnectorException(
+                    CommonErrorCodeDeprecated.SQL_OPERATION_FAILED, "Binary COPY read failed", e);
+        }
+        return !queue.isEmpty();
     }
 
     /**
@@ -139,18 +151,10 @@ public final class PgCopyBinaryReader implements PgCopyReader {
      */
     @Override
     public SeaTunnelRow next() {
-        try {
-            if (queue.isEmpty() && !eof) {
-                fillAndParse();
-                while (queue.isEmpty() && !eof) {
-                    fillAndParse();
-                }
-            }
-            return queue.poll();
-        } catch (IOException e) {
-            throw new JdbcConnectorException(
-                    CommonErrorCodeDeprecated.SQL_OPERATION_FAILED, "Binary COPY read failed", e);
+        if (!hasNext()) {
+            return null;
         }
+        return queue.poll();
     }
 
     /**
