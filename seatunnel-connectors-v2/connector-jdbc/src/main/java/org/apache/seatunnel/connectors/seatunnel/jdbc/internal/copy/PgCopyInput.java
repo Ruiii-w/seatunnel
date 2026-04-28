@@ -38,6 +38,8 @@ public final class PgCopyInput implements AutoCloseable {
     private transient CopyManagerProxy copyManagerProxy;
     private transient InputStream copyStream;
     private transient PgCopyReader reader;
+    private transient JdbcConnectionProvider connectionProvider;
+    private transient Connection copyConnection;
 
     public PgCopyInput(
             JdbcSourceConfig config,
@@ -78,9 +80,9 @@ public final class PgCopyInput implements AutoCloseable {
     }
 
     private Connection getConnection() throws SQLException, ClassNotFoundException {
-        JdbcConnectionProvider provider =
-                dialect.getJdbcConnectionProvider(config.getJdbcConnectionConfig());
-        return provider.getOrEstablishConnection();
+        connectionProvider = dialect.getJdbcConnectionProvider(config.getJdbcConnectionConfig());
+        copyConnection = connectionProvider.getOrEstablishConnection();
+        return copyConnection;
     }
 
     private PgCopyReader createReader(InputStream stream) throws Exception {
@@ -120,9 +122,16 @@ public final class PgCopyInput implements AutoCloseable {
 
     @Override
     public void close() {
-        List<Object> resources = Arrays.asList(reader, copyStream, copyManagerProxy);
+        List<Object> resources =
+                Arrays.asList(
+                        reader, copyStream, copyManagerProxy, copyConnection, connectionProvider);
         for (Object r : resources) {
             PgCopyUtils.closeQuietly(r);
         }
+        reader = null;
+        copyStream = null;
+        copyManagerProxy = null;
+        copyConnection = null;
+        connectionProvider = null;
     }
 }

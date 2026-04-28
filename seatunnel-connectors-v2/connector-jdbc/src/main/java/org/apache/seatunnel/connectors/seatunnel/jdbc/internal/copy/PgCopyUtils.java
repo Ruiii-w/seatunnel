@@ -5,6 +5,7 @@ import org.apache.seatunnel.common.exception.CommonErrorCodeDeprecated;
 import org.apache.seatunnel.connectors.seatunnel.jdbc.exception.JdbcConnectorException;
 
 import org.apache.commons.codec.binary.Base64;
+import org.apache.commons.codec.binary.Hex;
 
 import java.io.Closeable;
 import java.math.BigDecimal;
@@ -22,13 +23,16 @@ public final class PgCopyUtils {
     private PgCopyUtils() {}
 
     public static void closeQuietly(Object obj) {
-        if (obj instanceof Closeable) {
-            Closeable c = (Closeable) obj;
-            try {
-                c.close();
-            } catch (Exception ignored) {
-
+        if (obj == null) {
+            return;
+        }
+        try {
+            if (obj instanceof Closeable) {
+                ((Closeable) obj).close();
+            } else if (obj instanceof AutoCloseable) {
+                ((AutoCloseable) obj).close();
             }
+        } catch (Exception ignored) {
         }
     }
 
@@ -142,7 +146,7 @@ public final class PgCopyUtils {
     }
 
     public static Object parseValue(String raw, SeaTunnelDataType<?> type) {
-        if (raw == null || raw.isEmpty() || "\\N".equals(raw)) {
+        if (raw == null || "\\N".equals(raw)) {
             return null;
         }
 
@@ -173,6 +177,17 @@ public final class PgCopyUtils {
                 case TIMESTAMP:
                     return Timestamp.valueOf(raw).toLocalDateTime();
                 case BYTES:
+                    if (raw.length() >= 3
+                            && raw.charAt(0) == '\\'
+                            && raw.charAt(1) == '\\'
+                            && (raw.charAt(2) == 'x' || raw.charAt(2) == 'X')) {
+                        return Hex.decodeHex(raw.substring(3));
+                    }
+                    if (raw.length() >= 2
+                            && raw.charAt(0) == '\\'
+                            && (raw.charAt(1) == 'x' || raw.charAt(1) == 'X')) {
+                        return Hex.decodeHex(raw.substring(2));
+                    }
                     return Base64.decodeBase64(raw);
                 default:
                     throw new JdbcConnectorException(

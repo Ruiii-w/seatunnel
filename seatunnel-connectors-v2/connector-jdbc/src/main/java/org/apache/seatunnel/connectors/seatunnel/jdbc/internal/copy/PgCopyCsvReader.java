@@ -16,9 +16,11 @@ import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
 import java.util.Iterator;
 
 public final class PgCopyCsvReader implements PgCopyReader {
+    
 
     private static final Logger LOG = LoggerFactory.getLogger(PgCopyCsvReader.class);
 
@@ -29,8 +31,11 @@ public final class PgCopyCsvReader implements PgCopyReader {
 
     public PgCopyCsvReader(InputStream inputStream, TableSchema schema) throws IOException {
         this.schema = schema;
-        BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream));
-        this.parser = new CSVParser(reader, CSVFormat.POSTGRESQL_CSV);
+        BufferedReader reader =
+                new BufferedReader(new InputStreamReader(inputStream, StandardCharsets.UTF_8));
+        this.parser =
+                new CSVParser(
+                        reader, CSVFormat.POSTGRESQL_CSV.builder().setNullString("\\N").build());
         this.iterator = parser.iterator();
         this.hasNext = iterator.hasNext();
     }
