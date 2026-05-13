@@ -20,7 +20,6 @@ import java.nio.charset.StandardCharsets;
 import java.util.Iterator;
 
 public final class PgCopyCsvReader implements PgCopyReader {
-    
 
     private static final Logger LOG = LoggerFactory.getLogger(PgCopyCsvReader.class);
 

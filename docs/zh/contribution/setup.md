@@ -39,7 +39,7 @@ git clone git@github.com:apache/seatunnel.git
 ```
 mvn clean package -pl seatunnel-dist -am -Dmaven.test.skip=true
 
-./mvnw clean package -pl seatunnel-dist -am -Dmaven.test.skip=true -T 4
+./mvnw spotless:apply && ./mvnw clean package -pl seatunnel-dist -am -Dmaven.test.skip=true -T 4
 ```
 
 ### 编译子模块

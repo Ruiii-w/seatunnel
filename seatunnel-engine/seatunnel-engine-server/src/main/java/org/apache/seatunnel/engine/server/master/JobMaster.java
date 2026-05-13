@@ -30,7 +30,6 @@ import org.apache.seatunnel.api.sink.multitablesink.MultiTableSink;
 import org.apache.seatunnel.common.exception.SeaTunnelRuntimeException;
 import org.apache.seatunnel.common.utils.ExceptionUtils;
 import org.apache.seatunnel.common.utils.RetryUtils;
-import org.apache.seatunnel.common.utils.SeaTunnelException;
 import org.apache.seatunnel.engine.checkpoint.storage.exception.CheckpointStorageException;
 import org.apache.seatunnel.engine.common.Constant;
 import org.apache.seatunnel.engine.common.config.EngineConfig;
@@ -661,15 +660,25 @@ public class JobMaster {
     }
 
     public void savePipelineMetricsToHistory(PipelineLocation pipelineLocation) {
-        List<RawJobMetrics> currJobMetrics =
-                this.getCurrJobMetrics(Collections.singletonList(pipelineLocation));
-        JobMetrics jobMetrics = JobMetricsUtil.toJobMetrics(currJobMetrics);
-        long jobId = this.getJobImmutableInformation().getJobId();
-        synchronized (this) {
-            jobHistoryService.storeFinishedPipelineMetrics(jobId, jobMetrics);
+        try {
+            List<RawJobMetrics> currJobMetrics =
+                    this.getCurrJobMetrics(Collections.singletonList(pipelineLocation));
+            JobMetrics jobMetrics = JobMetricsUtil.toJobMetrics(currJobMetrics);
+            long jobId = this.getJobImmutableInformation().getJobId();
+            synchronized (this) {
+                jobHistoryService.storeFinishedPipelineMetrics(jobId, jobMetrics);
+            }
+        } catch (Exception e) {
+            LOGGER.warning(
+                    String.format(
+                            "Failed to save pipeline metrics for %s, "
+                                    + "but will still attempt to clean TaskGroupContext. Error: %s",
+                            pipelineLocation, ExceptionUtils.getMessage(e)));
+        } finally {
+            // Clean TaskGroupContext for TaskExecutionServer
+            // Always execute regardless of metrics success/failure
+            this.cleanTaskGroupContext(pipelineLocation);
         }
-        // Clean TaskGroupContext for TaskExecutionServer
-        this.cleanTaskGroupContext(pipelineLocation);
     }
 
     public void removeMetricsContext(
@@ -728,6 +737,7 @@ public class JobMaster {
         if (slotProfileMap == null) {
             return;
         }
+        List<TaskGroupLocation> failedTaskGroups = new ArrayList<>();
         slotProfileMap.forEach(
                 (taskGroupLocation, slotProfile) -> {
                     try {
@@ -745,9 +755,27 @@ public class JobMaster {
                                         "%s clean TaskGroupContext with exception: %s.",
                                         taskGroupLocation, ExceptionUtils.getMessage(e)));
                     } catch (Exception e) {
-                        throw new SeaTunnelException(e.getMessage());
+                        LOGGER.warning(
+                                String.format(
+                                        "%s clean TaskGroupContext failed: %s. "
+                                                + "Will be handled by local TTL cleanup on worker.",
+                                        taskGroupLocation, ExceptionUtils.getMessage(e)));
+                        failedTaskGroups.add(taskGroupLocation);
                     }
                 });
+
+        if (!failedTaskGroups.isEmpty()) {
+            LOGGER.warning(
+                    String.format(
+                            "Pipeline %s: %d/%d taskGroups failed to clean via master. "
+                                    + "They will be cleaned by local TTL (configured as %d min) "
+                                    + "on worker nodes. Failed taskGroups: %s",
+                            pipelineLocation,
+                            failedTaskGroups.size(),
+                            slotProfileMap.size(),
+                            engineConfig.getFinishedTaskContextTTLMinutes(),
+                            failedTaskGroups));
+        }
     }
 
     public PhysicalPlan getPhysicalPlan() {

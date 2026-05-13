@@ -133,6 +133,9 @@ public class TaskExecutionService implements DynamicMetricsProvider {
     private final ConcurrentMap<TaskGroupLocation, TaskGroupContext> finishedExecutionContexts =
             new ConcurrentHashMap<>();
 
+    private final ConcurrentMap<TaskGroupLocation, Long> finishedContextTimestamps =
+            new ConcurrentHashMap<>();
+
     private final ConcurrentMap<TaskGroupLocation, Map<String, CompletableFuture<?>>>
             taskAsyncFunctionFuture = new ConcurrentHashMap<>();
 
@@ -169,6 +172,10 @@ public class TaskExecutionService implements DynamicMetricsProvider {
                 seaTunnelConfig.getEngineConfig().getJobMetricsBackupInterval(),
                 TimeUnit.SECONDS);
 
+        // Register TTL-based cleanup for finished task group contexts
+        scheduledExecutorService.scheduleAtFixedRate(
+                this::cleanupExpiredFinishedContexts, 1, 1, TimeUnit.MINUTES);
+
         serverConnectorPackageClient =
                 new ServerConnectorPackageClient(nodeEngine, seaTunnelConfig);
 
@@ -182,6 +189,9 @@ public class TaskExecutionService implements DynamicMetricsProvider {
     public void shutdown() {
         isRunning = false;
         executorService.shutdownNow();
+        // Final safeguard: clear all finished execution contexts
+        finishedExecutionContexts.clear();
+        finishedContextTimestamps.clear();
         scheduledExecutorService.shutdown();
     }
 
@@ -524,6 +534,53 @@ public class TaskExecutionService implements DynamicMetricsProvider {
 
     public void notifyCleanTaskGroupContext(TaskGroupLocation taskGroupLocation) {
         finishedExecutionContexts.remove(taskGroupLocation);
+        finishedContextTimestamps.remove(taskGroupLocation);
+    }
+
+    /**
+     * Periodically scan {@link #finishedExecutionContexts} and remove entries that have exceeded
+     * the configured TTL. This is a safeguard for cases where the master-side cleanup chain fails
+     * (e.g., network issues, exceptions breaking the forEach loop in {@code
+     * JobMaster.cleanTaskGroupContext}).
+     *
+     * <p>This runs on {@link #scheduledExecutorService} at a fixed rate of 1 minute.
+     */
+    private void cleanupExpiredFinishedContexts() {
+        if (!isRunning) {
+            return;
+        }
+        int ttlMinutes = seaTunnelConfig.getEngineConfig().getFinishedTaskContextTTLMinutes();
+        if (ttlMinutes <= 0) {
+            return;
+        }
+        long ttlMillis = TimeUnit.MINUTES.toMillis(ttlMinutes);
+        long now = System.currentTimeMillis();
+        List<TaskGroupLocation> expired = new ArrayList<>();
+
+        finishedContextTimestamps.forEach(
+                (location, timestamp) -> {
+                    if (now - timestamp > ttlMillis) {
+                        expired.add(location);
+                    }
+                });
+
+        for (TaskGroupLocation location : expired) {
+            TaskGroupContext removed = finishedExecutionContexts.remove(location);
+            Long timestamp = finishedContextTimestamps.remove(location);
+            if (removed != null && timestamp != null) {
+                long ageMinutes = TimeUnit.MILLISECONDS.toMinutes(now - timestamp);
+                logger.warning(
+                        String.format(
+                                "TTL expired: forcibly cleaned finished task group context %s "
+                                        + "(age: %d minutes, TTL: %d minutes, jobId: %d, pipelineId: %d). "
+                                        + "This indicates master-side cleanup chain failure.",
+                                location,
+                                ageMinutes,
+                                ttlMinutes,
+                                location.getJobId(),
+                                location.getPipelineId()));
+            }
+        }
     }
 
     @Override
@@ -940,8 +997,9 @@ public class TaskExecutionService implements DynamicMetricsProvider {
             Throwable ex = executionException.get();
             if (completionLatch.decrementAndGet() == 0) {
                 recycleClassLoader(taskGroupLocation);
-                finishedExecutionContexts.put(
-                        taskGroupLocation, executionContexts.remove(taskGroupLocation));
+                TaskGroupContext removed = executionContexts.remove(taskGroupLocation);
+                finishedExecutionContexts.put(taskGroupLocation, removed);
+                finishedContextTimestamps.put(taskGroupLocation, System.currentTimeMillis());
                 cancellationFutures.remove(taskGroupLocation);
                 try {
                     cancelAsyncFunction(taskGroupLocation);

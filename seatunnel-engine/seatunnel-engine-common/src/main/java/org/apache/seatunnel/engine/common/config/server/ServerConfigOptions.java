@@ -138,6 +138,16 @@ public class ServerConfigOptions {
                     .defaultValue(1440)
                     .withDescription("The expire time of history jobs.time unit minute");
 
+    public static final Option<Integer> FINISHED_TASK_CONTEXT_TTL_MINUTES =
+            Options.key("finished-task-context-ttl-minutes")
+                    .intType()
+                    .defaultValue(30)
+                    .withDescription(
+                            "The TTL (in minutes) for finished task group contexts in "
+                                    + "TaskExecutionService. After this time, finished contexts "
+                                    + "will be cleaned up locally even if master cleanup fails. "
+                                    + "Set to 0 to disable TTL-based cleanup.");
+
     public static final Option<Boolean> ENABLE_CONNECTOR_JAR_STORAGE =
             Options.key("enable")
                     .booleanType()

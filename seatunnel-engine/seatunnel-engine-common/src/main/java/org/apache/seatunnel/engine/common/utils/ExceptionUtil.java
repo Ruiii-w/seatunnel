@@ -17,6 +17,7 @@
 package org.apache.seatunnel.engine.common.utils;
 
 import org.apache.seatunnel.common.utils.ExceptionUtils;
+import org.apache.seatunnel.common.utils.SeaTunnelException;
 import org.apache.seatunnel.common.utils.function.ConsumerWithException;
 import org.apache.seatunnel.common.utils.function.RunnableWithException;
 import org.apache.seatunnel.common.utils.function.SupplierWithException;
@@ -148,8 +149,26 @@ public final class ExceptionUtil {
 
     public static boolean isOperationNeedRetryException(@NonNull Throwable e) {
         Throwable exception = ExceptionUtils.getRootException(e);
-        return exception instanceof HazelcastInstanceNotActiveException
+        if (exception instanceof HazelcastInstanceNotActiveException
                 || exception instanceof InterruptedException
-                || exception instanceof OperationTimeoutException;
+                || exception instanceof OperationTimeoutException) {
+            return true;
+        }
+        // Unwrap SeaTunnelException and SeaTunnelEngineException to examine
+        // the root cause for retry eligibility. These wrapper exceptions are
+        // thrown by JobMaster.getCurrJobMetrics() and cleanTaskGroupContext()
+        // and were previously not retried, causing cleanup chain failures.
+        // Note: some call sites construct these exceptions with only a message
+        // string (losing the cause), in which case the cause will be null and
+        // this check will return false. Fixing those call sites to preserve the
+        // cause is recommended but out of scope here.
+        if (exception instanceof SeaTunnelException
+                || exception instanceof SeaTunnelEngineException) {
+            Throwable cause = exception.getCause();
+            if (cause != null) {
+                return isOperationNeedRetryException(cause);
+            }
+        }
+        return false;
     }
 }

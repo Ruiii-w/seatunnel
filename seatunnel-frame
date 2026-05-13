@@ -1,0 +1,186 @@
+  /home/seatunnel/                                                                                                                                                    
+  ├── bin/                          # 启动/停止脚本 (22 个文件)                                                                                                       
+  │   ├── install-plugin.cmd                                                                                                                                          
+  │   ├── install-plugin.sh                                                                                                                                           
+  │   ├── seatunnel-cluster2.sh                                                                                                                                       
+  │   ├── seatunnel-cluster.cmd                                                                                                                                       
+  │   ├── seatunnel-cluster.sh                                                                                                                                        
+  │   ├── seatunnel-cluster-with-dump.sh                                                                                                                              
+  │   ├── seatunnel.cmd                                                                                                                                               
+  │   ├── seatunnel-connector.cmd                                                                                                                                     
+  │   ├── seatunnel-connector.sh                                                                                                                                      
+  │   ├── seatunnel.sh                                                                                                                                                
+  │   ├── start-engine.sh                                                                                                                                             
+  │   ├── start-seatunnel-flink-13-connector-v2.cmd                                                                                                                   
+  │   ├── start-seatunnel-flink-13-connector-v2.sh                                                                                                                    
+  │   ├── start-seatunnel-flink-15-connector-v2.cmd                                                                                                                   
+  │   ├── start-seatunnel-flink-15-connector-v2.sh                                                                                                                    
+  │   ├── start-seatunnel-spark-2-connector-v2.cmd                                                                                                                    
+  │   ├── start-seatunnel-spark-2-connector-v2.sh                                                                                                                     
+  │   ├── start-seatunnel-spark-3-connector-v2.cmd                                                                                                                    
+  │   ├── start-seatunnel-spark-3-connector-v2.sh                                                                                                                     
+  │   ├── stop-seatunnel-cluster.cmd                                                                                                                                  
+  │   └── stop-seatunnel-cluster.sh                                                                                                                                   
+  │                                                                                                                                                                   
+  ├── config/                       # 配置文件 (34 个文件)                                                                                                            
+  │   ├── cdc_job.yml                                                                                                                                                 
+  │   ├── core-site.xml                                                                                                                                               
+  │   ├── dolphindb.template.dolphindb2hive.config                                                                                                                    
+  │   ├── hazelcast-client.yaml                                                                                                                                       
+  │   ├── hazelcast-master.yaml                                                                                                                                       
+  │   ├── hazelcast-worker-5802.yaml                                                                                                                                  
+  │   ├── hazelcast-worker-5803.yaml                                                                                                                                  
+  │   ├── hazelcast-worker.yaml                                                                                                                                       
+  │   ├── hazelcast.yaml                                                                                                                                              
+  │   ├── hdfs-site.xml                                                                                                                                               
+  │   ├── hive-site.xml                                                                                                                                               
+  │   ├── hr_oracle_to_pg_seatunnel_submit_cdc.py                                                                                                                     
+  │   ├── hr_oracle_to_pg_seatunnel_submit_cdc0623.py                                                                                                                 
+  │   ├── jobs/                     # 空目录                                                                                                                          
+  │   ├── jvm_client_options                                                                                                                                          
+  │   ├── jvm_master_options                                                                                                                                          
+  │   ├── jvm_master_options.bak                                                                                                                                      
+  │   ├── jvm_options                                                                                                                                                 
+  │   ├── jvm_worker_options                                                                                                                                          
+  │   ├── jvm_worker_options.bak                                                                                                                                      
+  │   ├── log4j2_client.properties                                                                                                                                    
+  │   ├── log4j2.properties                                                                                                                                           
+  │   ├── oracdc_console.yaml                                                                                                                                         
+  │   ├── oracle_cdc_simple.yml                                                                                                                                       
+  │   ├── plugin_config                                                                                                                                               
+  │   ├── seatunnel_cdc.conf                                                                                                                                          
+  │   ├── seatunnel_cdc_new.conf                                                                                                                                      
+  │   ├── seatunnel-env.cmd                                                                                                                                           
+  │   ├── seatunnel-env.sh                                                                                                                                            
+  │   ├── seatunnel.yaml                                                                                                                                              
+  │   ├── tpch100.nation.doris2paimon.config                                                                                                                          
+  │   ├── tpch100.template.doris2hive.config                                                                                                                          
+  │   ├── tpch100.template.doris2paimon.config                                                                                                                        
+  │   ├── v2.batch.config.template                                                                                                                                    
+  │   └── v2.streaming.conf.template                                                                                                                                  
+  │                                                                                                                                                                   
+  ├── connectors/                   # 连接器 JAR (36 个文件)                                                                                                          
+  │   ├── connector-cdc-mongodb-2.3.8.jar                                                                                                                             
+  │   ├── connector-cdc-mysql-2.3.8.jar                                                                                                                               
+  │   ├── connector-cdc-oracle-2.3.8.jar                                                                                                                              
+  │   ├── connector-cdc-postgres-2.3.8.jar                                                                                                                            
+  │   ├── connector-cdc-tidb-2.3.8.jar                                                                                                                                
+  │   ├── connector-clickhouse-2.3.8.jar                                                                                                                              
+  │   ├── connector-console-2.3.8.jar                                                                                                                                 
+  │   ├── connector-doris-2.3.8.jar                                                                                                                                   
+  │   ├── connector-doris-2.3.8.jar_bak                                                                                                                               
+  │   ├── connector-elasticsearch-2.3.8.jar                                                                                                                           
+  │   ├── connector-fake-2.3.8.jar                                                                                                                                    
+  │   ├── connector-file-ftp-2.3.8.jar                                                                                                                                
+  │   ├── connector-file-hadoop-2.3.8.jar                                                                                                                             
+  │   ├── connector-file-local-2.3.8.jar                                                                                                                              
+  │   ├── connector-file-sftp-2.3.8.jar                                                                                                                               
+  │   ├── connector-hbase-2.3.8.jar                                                                                                                                   
+  │   ├── connector-hive-2.3.8.jar                                                                                                                                    
+  │   ├── connector-http-base-2.3.8.jar                                                                                                                               
+  │   ├── connector-hudi-2.3.8.jar                                                                                                                                    
+  │   ├── connector-iceberg-2.3.8.jar                                                                                                                                 
+  │   ├── connector-influxdb-2.3.8.jar                                                                                                                                
+  │   ├── connector-jdbc-2.3.8.jar                                                                                                                                    
+  │   ├── connector-jdbc-2.3.8.jar.bak                                                                                                                                
+  │   ├── connector-kafka-2.3.8.jar                                                                                                                                   
+  │   ├── connector-kudu-2.3.8.jar                                                                                                                                    
+  │   ├── connector-mongodb-2.3.8.jar                                                                                                                                 
+  │   ├── connector-paimon-2.3.8.jar                                                                                                                                  
+  │   ├── connector-paimon-2.3.8.jar.old                                                                                                                              
+  │   ├── connector-postgres-copy-2.3.8.jar                                                                                                                           
+  │   ├── connector-rabbitmq-2.3.8.jar                                                                                                                                
+  │   ├── connector-redis-2.3.8.jar                                                                                                                                   
+  │   ├── connector-rocketmq-2.3.8.jar                                                                                                                                
+  │   ├── connector-starrocks-2.3.8.jar                                                                                                                               
+  │   ├── hive-jdbc-2.3.8.jar                                                                                                                                         
+  │   ├── plugin-mapping.properties                                                                                                                                   
+  │   └── seatunnel-transforms-v2-2.3.8.jar                                                                                                                           
+  │                                                                                                                                                                   
+  ├── data_move/                    # 数据迁移脚本 (9 个文件)                                                                                                         
+  │   ├── insert_by_partition.sh                                                                                                                                      
+  │   ├── insert_start.sh
+  │   ├── partition.txt                                                                                                                                               
+  │   ├── query_parition.sh
+  │   ├── split_task.sh
+  │   ├── task00                                                                                                                                                      
+  │   ├── tpch_insert_by_table.sh                                                                                                                                     
+  │   └── tpch_insert_start.sh                                                                                                                                        
+  │                                                                                                                                                                   
+  ├── lib/                          # 依赖库 JAR (7 个文件)                                                                                                           
+  │   ├── hive-exec-3.1.3.jar                                                                                                                                         
+  │   ├── hive-jdbc-2.3.8.jar                                                                                                                                         
+  │   ├── libfb303-0.9.3.jar                                                                                                                                          
+  │   ├── mysql-connector-java-8.0.27.jar                                                                                                                             
+  │   ├── ojdbc8.jar                                                                                                                                                  
+  │   ├── postgresql-42.2.5.jar                                                                                                                                       
+  │   └── seatunnel-hadoop3-3.1.4-uber.jar                                                                                                                            
+  │                                                                                                                                                                   
+  ├── logs/                         # 运行日志                                                                                                                        
+  │   ├── seatunnel-engine-master.log                                                                                                                                 
+  │   ├── seatunnel-engine-master.log.YYYY-MM-DD-N                                                                                                                    
+  │   ├── seatunnel-engine-worker.log                                                                                                                                 
+  │   ├── seatunnel-engine-worker.log.YYYY-MM-DD-N                                                                                                                    
+  │   ├── seatunnel-engine-server.log                                                                                                                                 
+  │   ├── seatunnel-engine.out                                                                                                                                        
+  │   └── seatunnel-server.out                                                                                                                                        
+  │                                                                                                                                                                   
+  ├── ndh/                          # Hadoop/Hive 配置                                                                                                                
+  │   ├── hadoop/                                                                                                                                                     
+  │   │   ├── core-site.xml                                                                                                                                           
+  │   │   ├── hdfs-site.xml                                                                                                                                           
+  │   │   └── hive-site.xml                                                                                                                                           
+  │   ├── hive/                                                                                                                                                       
+  │   │   ├── core-site.xml                                                                                                                                           
+  │   │   ├── hdfs-site.xml                                                                                                                                           
+  │   │   └── hive-site.xml                                                                                                                                           
+  │   └── huawei/                                                                                                                                                     
+  │       ├── hdfs-site.xml                                                                                                                                           
+  │       └── hive-site.xml                                                                                                                                           
+  │                                                                                                                                                                   
+  ├── ndh_bak/                      # 备份配置                                                                                                                        
+  │   ├── hadoop/                                                                                                                                                     
+  │   │   └── hdfs-site.xml                                                                                                                                           
+  │   └── hive/                                                                                                                                                       
+  │       ├── core-site.xml                                                                                                                                           
+  │       ├── hdfs-site.xml                                                                                                                                           
+  │       └── hive-site.xml                                                                                                                                           
+  │                                                                                                                                                                   
+  ├── output/                       # 输出目录 (空)                                                                                                                   
+  │                                                                                                                                                                   
+  ├── plugins/    
+  │   └── README.md                                                                                                                                                   
+  │                                                                                                                                                                   
+  ├── starter/                      # 启动器 JAR                                                                                                                      
+  │   ├── logging/                                                                                                                                                    
+  │   │   ├── jcl-over-slf4j-1.7.25.jar                                                                                                                               
+  │   │   ├── log4j-api-2.17.1.jar                                                                                                                                    
+  │   │   ├── log4j-core-2.17.1.jar                                                                                                                                   
+  │   │   ├── log4j-slf4j-impl-2.17.1.jar                                                                                                                             
+  │   │   └── slf4j-api-1.7.25.jar                                                                                                                                    
+  │   ├── seatunnel-flink-13-starter.jar                                                                                                                              
+  │   ├── seatunnel-flink-15-starter.jar                                                                                                                              
+  │   ├── seatunnel-spark-2-starter.jar                                                                                                                               
+  │   ├── seatunnel-spark-3-starter.jar                                                                                                                               
+  │   └── seatunnel-starter.jar                                                                                                                                       
+  │                                                                                                                                                                   
+  ├── licenses/                     # 许可证文件 (70+ 个 LICENSE-*.txt)                                                                                               
+  │                                                                                                                                                                   
+  ├── myenv/                        # Python 虚拟环境                                                                                                                 
+  │   ├── bin/                                                                                                                                                        
+  │   ├── lib/                                                                                                                                                        
+  │   ├── .gitignore                                                                                                                                                  
+  │   ├── CACHEDIR.TAG                                                                                                                                                
+  │   └── pyvenv.cfg                                                                                                                                                  
+  │                                                                                                                                                                   
+  ├── .claude/                                                                                                                                                        
+  │   └── settings.local.json                                                                                                                                         
+  │                                                                                                                                                                   
+  ├── batch.config                                                                                                                                                    
+  ├── doris_check.py                                                                                                                                                  
+  ├── LICENSE                                                                                                                                                         
+  ├── mvnw                                                                                                                                                            
+  ├── mvnw.cmd                                                                                                                                                        
+  ├── nohup.out                                                                                                                                                       
+  ├── NOTICE                                                                                                                                                                                                                                                                  
+  ├── README.md                                                                                                                        

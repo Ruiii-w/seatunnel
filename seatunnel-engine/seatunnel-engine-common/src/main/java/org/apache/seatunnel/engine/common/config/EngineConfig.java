@@ -65,6 +65,9 @@ public class EngineConfig {
     private int historyJobExpireMinutes =
             ServerConfigOptions.HISTORY_JOB_EXPIRE_MINUTES.defaultValue();
 
+    private int finishedTaskContextTTLMinutes =
+            ServerConfigOptions.FINISHED_TASK_CONTEXT_TTL_MINUTES.defaultValue();
+
     private ClusterRole clusterRole = ClusterRole.MASTER_AND_WORKER;
 
     private String eventReportHttpApi;
@@ -110,6 +113,14 @@ public class EngineConfig {
                 historyJobExpireMinutes,
                 ServerConfigOptions.HISTORY_JOB_EXPIRE_MINUTES + " must be > 0");
         this.historyJobExpireMinutes = historyJobExpireMinutes;
+    }
+
+    public void setFinishedTaskContextTTLMinutes(int finishedTaskContextTTLMinutes) {
+        if (finishedTaskContextTTLMinutes < 0) {
+            throw new IllegalArgumentException(
+                    ServerConfigOptions.FINISHED_TASK_CONTEXT_TTL_MINUTES + " must be >= 0");
+        }
+        this.finishedTaskContextTTLMinutes = finishedTaskContextTTLMinutes;
     }
 
     public EngineConfig setQueueType(QueueType queueType) {
