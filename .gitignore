@@ -55,3 +55,10 @@ spark-warehouse
 
 /lib/*
 version.properties
+
+# dump log directory
+dump_log/
+
+# tmp log files
+tmp.log
+tmp2.log
