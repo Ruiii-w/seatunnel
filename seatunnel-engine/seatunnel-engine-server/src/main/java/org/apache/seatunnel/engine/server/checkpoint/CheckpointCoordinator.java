@@ -152,6 +152,20 @@ public class CheckpointCoordinator {
 
     private final String checkpointStateImapKey;
 
+    /**
+     * Maximum size for a single checkpoint state byte array before splitting into chunks. Set to
+     * 1MB to stay well below the G1 Humongous Allocation threshold (typically 2MB for an 8GB heap
+     * with 4MB regions). Objects above the Humongous threshold are allocated directly in the Old
+     * Generation and are very expensive to collect.
+     */
+    private static final int MAX_SINGLE_STATE_BYTES = 1024 * 1024;
+
+    /**
+     * Size of each chunk when splitting a large checkpoint state. Set to 512KB to ensure each chunk
+     * stays comfortably below the Humongous threshold.
+     */
+    private static final int CHUNK_SIZE_BYTES = 512 * 1024;
+
     @SneakyThrows
     public CheckpointCoordinator(
             CheckpointManager manager,
@@ -806,6 +820,20 @@ public class CheckpointCoordinator {
                                                 "checkpoint-coordinator-%s/%s", pipelineId, jobId));
                                 return thread;
                             });
+
+            // Proactively remove the checkpoint state key from IMap to prevent
+            // accumulation of stale entries in engine_runningJobState
+            try {
+                runningJobStateIMap.remove(checkpointStateImapKey);
+                LOG.debug(
+                        "Removed checkpoint state key: {} from IMap",
+                        checkpointStateImapKey);
+            } catch (Exception e) {
+                LOG.warn(
+                        "Failed to remove checkpoint state key: {} from IMap",
+                        checkpointStateImapKey,
+                        e);
+            }
         }
     }
 
@@ -852,13 +880,24 @@ public class CheckpointCoordinator {
         try {
             if (completedCheckpoint.getCheckpointType().notCompletedCheckpoint()) {
                 byte[] states = serializer.serialize(completedCheckpoint);
-                checkpointStorage.storeCheckPoint(
-                        PipelineState.builder()
-                                .checkpointId(checkpointId)
-                                .jobId(String.valueOf(jobId))
-                                .pipelineId(pipelineId)
-                                .states(states)
-                                .build());
+                // If the serialized state exceeds MAX_SINGLE_STATE_BYTES, split it into
+                // smaller chunks to avoid G1 Humongous Allocation (>2MB goes directly to
+                // Old Generation and is expensive to collect).
+                if (states.length > MAX_SINGLE_STATE_BYTES) {
+                    storeCheckpointInChunks(
+                            checkpointId,
+                            String.valueOf(jobId),
+                            pipelineId,
+                            states);
+                } else {
+                    checkpointStorage.storeCheckPoint(
+                            PipelineState.builder()
+                                    .checkpointId(checkpointId)
+                                    .jobId(String.valueOf(jobId))
+                                    .pipelineId(pipelineId)
+                                    .states(states)
+                                    .build());
+                }
             }
             if (completedCheckpointIds.size()
                                     % coordinatorConfig.getStorage().getMaxRetainedCheckpoints()
@@ -901,6 +940,78 @@ public class CheckpointCoordinator {
                 checkpointCoordinatorFuture.complete(
                         new CheckpointCoordinatorState(CheckpointCoordinatorStatus.FINISHED, null));
             }
+        }
+    }
+
+    /**
+     * Store a large checkpoint state by splitting it into multiple chunks. Each chunk is at most
+     * {@link #CHUNK_SIZE_BYTES} bytes (512KB), well below the G1 Humongous Allocation threshold.
+     *
+     * <p>This avoids the problem where a single large byte[] (>2MB) is allocated directly in the
+     * Old Generation by G1GC and becomes very expensive to collect, contributing to persistent Old
+     * Generation occupancy.
+     *
+     * @param checkpointId the checkpoint ID
+     * @param jobIdStr the job ID as String
+     * @param pipelineId the pipeline ID
+     * @param fullData the full serialized checkpoint state
+     */
+    private void storeCheckpointInChunks(
+            long checkpointId, String jobIdStr, int pipelineId, byte[] fullData) {
+        int totalChunks = (int) Math.ceil((double) fullData.length / CHUNK_SIZE_BYTES);
+        LOG.info(
+                "Checkpoint {}/{} state is {} bytes, splitting into {} chunks of max {} bytes each",
+                checkpointId, pipelineId, fullData.length, totalChunks, CHUNK_SIZE_BYTES);
+
+        // Collect all chunk storage futures for parallel execution
+        List<CompletableFuture<Void>> futures = new ArrayList<>(totalChunks);
+        for (int i = 0; i < totalChunks; i++) {
+            final int chunkIndex = i;
+            int start = i * CHUNK_SIZE_BYTES;
+            int end = Math.min(start + CHUNK_SIZE_BYTES, fullData.length);
+
+            CompletableFuture<Void> future =
+                    CompletableFuture.runAsync(
+                            () -> {
+                                try {
+                                    byte[] chunk = new byte[end - start];
+                                    System.arraycopy(
+                                            fullData, start, chunk, 0, end - start);
+                                    checkpointStorage.storeCheckPoint(
+                                            PipelineState.builder()
+                                                    .checkpointId(checkpointId)
+                                                    .jobId(jobIdStr)
+                                                    .pipelineId(pipelineId)
+                                                    .states(chunk)
+                                                    .build());
+                                } catch (Throwable e) {
+                                    LOG.error(
+                                            "Failed to store checkpoint chunk {}/{}",
+                                            chunkIndex + 1,
+                                            totalChunks,
+                                            e);
+                                    sneakyThrow(e);
+                                }
+                            },
+                            executorService);
+            futures.add(future);
+        }
+
+        // Wait for all chunks to be stored
+        try {
+            CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
+            LOG.info(
+                    "All {} chunks for checkpoint {}/{} stored successfully",
+                    totalChunks,
+                    checkpointId,
+                    pipelineId);
+        } catch (Exception e) {
+            LOG.error(
+                    "Failed to store checkpoint {}/{} in chunks",
+                    checkpointId,
+                    pipelineId,
+                    e);
+            throw e;
         }
     }
 
@@ -975,30 +1086,66 @@ public class CheckpointCoordinator {
         return new PassiveCompletableFuture<>(checkpointCoordinatorFuture);
     }
 
+    /**
+     * Update the checkpoint coordinator status to IMap asynchronously.
+     *
+     * <p>This method is changed from synchronous blocking with 30 retries (up to 60s blocking) to
+     * asynchronous fire-and-forget with 5 retries (up to 2.5s). This avoids: 1) blocking the
+     * calling thread for up to 60 seconds, 2) producing massive duplicate serialized byte[] from
+     * repeated IMap.set() calls during retries, 3) unnecessary IMap.set() when the status is
+     * already the target value.
+     */
     private synchronized void updateStatus(@NonNull CheckpointCoordinatorStatus targetStatus) {
+        // Fast path: skip if already at target status to avoid unnecessary IMap write
+        CheckpointCoordinatorStatus currentStatus;
         try {
-            RetryUtils.retryWithException(
-                    () -> {
-                        LOG.info(
-                                String.format(
-                                        "Turn %s state from %s to %s",
-                                        checkpointStateImapKey,
-                                        runningJobStateIMap.get(checkpointStateImapKey),
-                                        targetStatus));
-                        runningJobStateIMap.set(checkpointStateImapKey, targetStatus);
-                        return null;
-                    },
-                    new RetryUtils.RetryMaterial(
-                            Constant.OPERATION_RETRY_TIME,
-                            true,
-                            exception -> ExceptionUtil.isOperationNeedRetryException(exception),
-                            Constant.OPERATION_RETRY_SLEEP));
+            currentStatus =
+                    (CheckpointCoordinatorStatus)
+                            runningJobStateIMap.get(checkpointStateImapKey);
         } catch (Exception e) {
-            LOG.warn(
-                    String.format(
-                            "Set %s state %s to IMap failed, skip do it",
-                            checkpointStateImapKey, targetStatus));
+            currentStatus = null;
         }
+        if (targetStatus.equals(currentStatus)) {
+            if (LOG.isDebugEnabled()) {
+                LOG.debug(
+                        "Status already {}, skip update for {}",
+                        targetStatus,
+                        checkpointStateImapKey);
+            }
+            return;
+        }
+
+        // Execute asynchronously to avoid blocking the caller
+        final CheckpointCoordinatorStatus statusBeforeUpdate = currentStatus;
+        CompletableFuture.runAsync(
+                () -> {
+                    try {
+                        RetryUtils.retryWithException(
+                                () -> {
+                                    runningJobStateIMap.set(
+                                            checkpointStateImapKey, targetStatus);
+                                    return null;
+                                },
+                                new RetryUtils.RetryMaterial(
+                                        5, // Reduced from 30 to 5 retries
+                                        true,
+                                        exception ->
+                                                ExceptionUtil.isOperationNeedRetryException(
+                                                        exception),
+                                        500)); // Reduced from 2000ms to 500ms
+                        LOG.info(
+                                "Turn {} state from {} to {}",
+                                checkpointStateImapKey,
+                                statusBeforeUpdate,
+                                targetStatus);
+                    } catch (Exception e) {
+                        LOG.warn(
+                                "Set {} state {} to IMap failed after retries, skip",
+                                checkpointStateImapKey,
+                                targetStatus);
+                    }
+                },
+                executorService);
     }
 
     protected void scheduleSchemaChangeBeforeCheckpoint() {

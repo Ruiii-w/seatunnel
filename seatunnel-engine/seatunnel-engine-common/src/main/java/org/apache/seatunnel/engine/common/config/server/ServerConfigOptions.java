@@ -135,8 +135,11 @@ public class ServerConfigOptions {
     public static final Option<Integer> HISTORY_JOB_EXPIRE_MINUTES =
             Options.key("history-job-expire-minutes")
                     .intType()
-                    .defaultValue(1440)
-                    .withDescription("The expire time of history jobs.time unit minute");
+                    .defaultValue(60)
+                    .withDescription(
+                            "The expire time of history jobs.time unit minute. "
+                                    + "Default 60 minutes to reduce IMap memory pressure from finished job state data. "
+                                    + "Set a higher value if longer history retention is required.");
 
     public static final Option<Integer> FINISHED_TASK_CONTEXT_TTL_MINUTES =
             Options.key("finished-task-context-ttl-minutes")

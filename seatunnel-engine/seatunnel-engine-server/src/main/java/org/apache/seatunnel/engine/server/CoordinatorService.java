@@ -527,6 +527,19 @@ public class CoordinatorService {
                             if (!jobMaster.getJobMasterCompleteFuture().isCancelled()) {
                                 runningJobMasterMap.remove(jobId);
                             }
+                            // Proactively clean up runningJobInfo IMap entry to prevent
+                            // stale entries accumulating in memory
+                            try {
+                                runningJobInfoIMap.remove(jobId);
+                                logger.info(
+                                        "Cleaned up runningJobInfo for completed job "
+                                                + jobId);
+                            } catch (Exception e) {
+                                logger.warning(
+                                        "Failed to cleanup runningJobInfo for job "
+                                                + jobId,
+                                        e);
+                            }
                         }
                     } else {
                         runningJobInfoIMap.remove(jobId);

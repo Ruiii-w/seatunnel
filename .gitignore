@@ -62,3 +62,4 @@ dump_log/
 # tmp log files
 tmp.log
 tmp2.log
+skill_reproduce/
