@@ -31,7 +31,10 @@ hazelcast:
     hazelcast.invocation.max.retry.count: 20
     hazelcast.tcp.join.port.try.count: 30
     hazelcast.logging.type: log4j2
-    hazelcast.operation.generic.thread.count: 50
+    # ===== Worker 节点: 高吞吐任务执行 =====
+    hazelcast.operation.generic.thread.count: 24
+    hazelcast.operation.thread.count: 12
+    hazelcast.operation.call.timeout.millis: 30000
     hazelcast.heartbeat.failuredetector.type: phi-accrual
     hazelcast.heartbeat.interval.seconds: 2
     hazelcast.max.no.heartbeat.seconds: 180

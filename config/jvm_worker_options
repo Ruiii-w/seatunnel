@@ -28,3 +28,12 @@
 
 # G1GC
 -XX:+UseG1GC
+# ===== G1GC 调优参数 (加速老年代回收) =====
+-XX:G1HeapRegionSize=4m
+-XX:MaxGCPauseMillis=200
+-XX:G1MixedGCLiveThresholdPercent=85
+-XX:G1HeapWastePercent=5
+-XX:G1MixedGCCountTarget=8
+-XX:G1OldCSetRegionThresholdPercent=20
+-XX:InitiatingHeapOccupancyPercent=40
+-XX:G1PeriodicGCInterval=5000

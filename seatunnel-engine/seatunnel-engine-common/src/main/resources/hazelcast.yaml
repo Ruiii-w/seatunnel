@@ -38,4 +38,28 @@ hazelcast:
     hazelcast.invocation.max.retry.count: 20
     hazelcast.tcp.join.port.try.count: 30
     hazelcast.logging.type: log4j2
-    hazelcast.operation.generic.thread.count: 50
+    # ===== 高吞吐大数据量配置 (CPU ≥16核) =====
+    hazelcast.operation.generic.thread.count: 24
+    hazelcast.operation.thread.count: 12
+    hazelcast.operation.call.timeout.millis: 30000
+  # ===== IMap 表 TTL 配置 (防止数据无限增长) =====
+  map:
+    engine_runningJobState:
+      time-to-live-seconds: 3600
+      max-idle-seconds: 1800
+    engine_ownedSlotProfilesIMap:
+      time-to-live-seconds: 3600
+      max-idle-seconds: 1800
+    engine_runningJobInfo:
+      time-to-live-seconds: 7200
+      max-idle-seconds: 3600
+    engine_checkpoint-id-map:
+      time-to-live-seconds: 3600
+    engine_finishedJobState:
+      time-to-live-seconds: 3600
+    engine_finishedJobMetrics:
+      time-to-live-seconds: 3600
+    engine_finishedJobVertexInfo:
+      time-to-live-seconds: 3600
+    engine_runningJobMetrics:
+      time-to-live-seconds: 3600

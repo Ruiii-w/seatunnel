@@ -17,7 +17,7 @@
 
 seatunnel:
   engine:
-    history-job-expire-minutes: 1440
+    history-job-expire-minutes: 60
     backup-count: 1
     queue-type: blockingqueue
     print-execution-info-interval: 60
