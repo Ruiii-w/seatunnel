@@ -34,6 +34,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Base64;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
@@ -139,10 +140,24 @@ public final class ConfigShadeUtils {
         String jsonString = config.root().render(ConfigRenderOptions.concise());
         ObjectNode jsonNodes = JsonUtils.parseObject(jsonString);
         Map<String, Object> configMap = JsonUtils.toMap(jsonNodes);
-        List<Map<String, Object>> sources =
-                (ArrayList<Map<String, Object>>) configMap.get(Constants.SOURCE);
-        List<Map<String, Object>> sinks =
-                (ArrayList<Map<String, Object>>) configMap.get(Constants.SINK);
+        Object sourceObj = configMap.get(Constants.SOURCE);
+        List<Map<String, Object>> sources;
+        if (sourceObj instanceof List) {
+            sources = (List<Map<String, Object>>) sourceObj;
+        } else if (sourceObj instanceof Map) {
+            sources = Collections.singletonList((Map<String, Object>) sourceObj);
+        } else {
+            sources = Collections.emptyList();
+        }
+        Object sinkObj = configMap.get(Constants.SINK);
+        List<Map<String, Object>> sinks;
+        if (sinkObj instanceof List) {
+            sinks = (List<Map<String, Object>>) sinkObj;
+        } else if (sinkObj instanceof Map) {
+            sinks = Collections.singletonList((Map<String, Object>) sinkObj);
+        } else {
+            sinks = Collections.emptyList();
+        }
         Preconditions.checkArgument(
                 !sources.isEmpty(), "Miss <Source> config! Please check the config file.");
         Preconditions.checkArgument(
