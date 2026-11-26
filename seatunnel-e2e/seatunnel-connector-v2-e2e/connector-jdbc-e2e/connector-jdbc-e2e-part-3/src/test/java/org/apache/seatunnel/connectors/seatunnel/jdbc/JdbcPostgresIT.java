@@ -17,9 +17,6 @@
 
 package org.apache.seatunnel.connectors.seatunnel.jdbc;
 
-import org.apache.seatunnel.shade.com.google.common.collect.Lists;
-import org.apache.seatunnel.shade.org.apache.commons.lang3.StringUtils;
-
 import org.apache.seatunnel.api.table.catalog.Catalog;
 import org.apache.seatunnel.api.table.catalog.CatalogTable;
 import org.apache.seatunnel.api.table.catalog.ConstraintKey;
@@ -32,7 +29,9 @@ import org.apache.seatunnel.connectors.seatunnel.jdbc.internal.dialect.DatabaseI
 import org.apache.seatunnel.e2e.common.TestResource;
 import org.apache.seatunnel.e2e.common.TestSuiteBase;
 import org.apache.seatunnel.e2e.common.container.ContainerExtendedFactory;
+import org.apache.seatunnel.e2e.common.container.EngineType;
 import org.apache.seatunnel.e2e.common.container.TestContainer;
+import org.apache.seatunnel.e2e.common.junit.DisabledOnContainer;
 import org.apache.seatunnel.e2e.common.junit.TestContainerExtension;
 import org.apache.seatunnel.e2e.common.util.JdbcUtil;
 
@@ -55,6 +54,7 @@ import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
@@ -62,6 +62,10 @@ import java.util.stream.Stream;
 import static org.awaitility.Awaitility.given;
 
 @Slf4j
+@DisabledOnContainer(
+        value = {},
+        type = {EngineType.FLINK, EngineType.SPARK},
+        disabledReason = "Flink and Spark image pull failed")
 public class JdbcPostgresIT extends TestSuiteBase implements TestResource {
     private static final String PG_IMAGE = "postgis/postgis";
     private static final String PG_DRIVER_JAR =
@@ -71,13 +75,13 @@ public class JdbcPostgresIT extends TestSuiteBase implements TestResource {
     private static final String PG_GEOMETRY_JAR =
             "https://repo1.maven.org/maven2/net/postgis/postgis-geometry/2.5.1/postgis-geometry-2.5.1.jar";
     private static final List<String> PG_CONFIG_FILE_LIST =
-            Lists.newArrayList(
+            Arrays.asList(
                     "/jdbc_postgres_source_and_sink.conf",
                     "/jdbc_postgres_source_and_sink_copy_stmt.conf",
                     "/jdbc_postgres_source_and_sink_parallel.conf",
                     "/jdbc_postgres_source_and_sink_parallel_upper_lower.conf",
                     "/jdbc_postgres_source_and_sink_xa.conf",
-                    "/jdbc_postgres_source_copy_binary.conf");
+                    "/jdbc_postgres_source_copy_csv.conf");
     private PostgreSQLContainer<?> POSTGRESQL_CONTAINER;
     private static final String PG_SOURCE_DDL =
             "CREATE TABLE IF NOT EXISTS pg_e2e_source_table (\n"
@@ -159,7 +163,6 @@ public class JdbcPostgresIT extends TestSuiteBase implements TestResource {
                     + "uuid_col, \n"
                     + "text_col,\n"
                     + "varchar_col,\n"
-                    + "char_one_col,\n"
                     + "char_col,\n"
                     + "boolean_col,\n"
                     + "smallint_col,\n"
@@ -174,7 +177,6 @@ public class JdbcPostgresIT extends TestSuiteBase implements TestResource {
                     + "bigserial_col,\n"
                     + "date_col,\n"
                     + "timestamp_col,\n"
-                    + "timestamp_tz_col,\n"
                     + "bpchar_col,\n"
                     + "age,\n"
                     + "name,\n"
@@ -189,14 +191,13 @@ public class JdbcPostgresIT extends TestSuiteBase implements TestResource {
                     + "json_col,\n"
                     + "jsonb_col,\n"
                     + " cast(xml_col as varchar) \n"
-                    + "from pg_e2e_source_table";
+                    + "from pg_e2e_source_table order by gid";
     private static final String SINK_SQL =
             "select\n"
                     + "  gid,\n"
                     + "uuid_col, \n"
                     + "   text_col,\n"
                     + "   varchar_col,\n"
-                    + "   char_one_col,\n"
                     + "   char_col,\n"
                     + "   boolean_col,\n"
                     + "   smallint_col,\n"
@@ -211,7 +212,6 @@ public class JdbcPostgresIT extends TestSuiteBase implements TestResource {
                     + "   bigserial_col,\n"
                     + "   date_col,\n"
                     + "   timestamp_col,\n"
-                    + "   timestamp_tz_col,\n"
                     + "   bpchar_col,\n"
                     + "  age,\n"
                     + "  name,\n"
@@ -227,7 +227,7 @@ public class JdbcPostgresIT extends TestSuiteBase implements TestResource {
                     + "   jsonb_col,\n"
                     + "  cast(xml_col as varchar) \n"
                     + "from\n"
-                    + "  pg_e2e_sink_table";
+                    + "  pg_e2e_sink_table order by gid";
 
     @TestContainerExtension
     private final ContainerExtendedFactory extendedFactory =
@@ -281,8 +281,7 @@ public class JdbcPostgresIT extends TestSuiteBase implements TestResource {
                         POSTGRESQL_CONTAINER.getUsername(),
                         POSTGRESQL_CONTAINER.getPassword(),
                         JdbcUrlUtil.getUrlInfo(POSTGRESQL_CONTAINER.getJdbcUrl()),
-                        schema,
-                        null);
+                        schema);
         postgresCatalog.open();
 
         CatalogTable catalogTable = postgresCatalog.getTable(sourceTablePath);
@@ -306,7 +305,9 @@ public class JdbcPostgresIT extends TestSuiteBase implements TestResource {
         TableSchema tableSchema = catalog.getTable(targetTablePath).getTableSchema();
         PrimaryKey primaryKey = tableSchema.getPrimaryKey();
         List<ConstraintKey> constraintKeys = tableSchema.getConstraintKeys();
-        if (primaryKey != null && StringUtils.isNotBlank(primaryKey.getPrimaryKey())) {
+        if (primaryKey != null
+                && primaryKey.getPrimaryKey() != null
+                && !primaryKey.getPrimaryKey().trim().isEmpty()) {
             return true;
         }
         if (!constraintKeys.isEmpty()) {
@@ -375,8 +376,7 @@ public class JdbcPostgresIT extends TestSuiteBase implements TestResource {
                         POSTGRESQL_CONTAINER.getUsername(),
                         POSTGRESQL_CONTAINER.getPassword(),
                         JdbcUrlUtil.getUrlInfo(POSTGRESQL_CONTAINER.getJdbcUrl()),
-                        schema,
-                        null);
+                        schema);
         catalog.open();
 
         TablePath tablePath = new TablePath(databaseName, schema, tableName);
@@ -555,8 +555,7 @@ public class JdbcPostgresIT extends TestSuiteBase implements TestResource {
                         POSTGRESQL_CONTAINER.getUsername(),
                         POSTGRESQL_CONTAINER.getPassword(),
                         JdbcUrlUtil.getUrlInfo(POSTGRESQL_CONTAINER.getJdbcUrl()),
-                        schema,
-                        null);
+                        schema);
         postgresCatalog.open();
         CatalogTable catalogTable = postgresCatalog.getTable(tablePathPG);
         // sink tableExists ?

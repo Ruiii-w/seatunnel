@@ -59,9 +59,8 @@ public final class PgCopyInput implements AutoCloseable {
     public void open(JdbcSourceSplit split) {
         try {
             String selectSql = chunkSplitter.generateSplitQuerySQL(split, tableSchema);
-            String copySql =
-                    String.format(
-                            "COPY (%s) TO STDOUT WITH %s", selectSql, useBinary ? "BINARY" : "CSV");
+            String copyFormat = useBinary ? "BINARY" : "(FORMAT CSV, NULL '\\\\N')";
+            String copySql = String.format("COPY (%s) TO STDOUT WITH %s", selectSql, copyFormat);
 
             Connection conn = getConnection();
             LOG.info("Open PG COPY split={}, sql={}", split.splitId(), copySql);
@@ -80,7 +79,10 @@ public final class PgCopyInput implements AutoCloseable {
     }
 
     private Connection getConnection() throws SQLException, ClassNotFoundException {
-        connectionProvider = dialect.getJdbcConnectionProvider(config.getJdbcConnectionConfig());
+        if (connectionProvider == null) {
+            connectionProvider =
+                    dialect.getJdbcConnectionProvider(config.getJdbcConnectionConfig());
+        }
         copyConnection = connectionProvider.getOrEstablishConnection();
         return copyConnection;
     }

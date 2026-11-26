@@ -16,6 +16,8 @@ import java.sql.Time;
 import java.sql.Timestamp;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
+import java.time.format.DateTimeParseException;
 
 /** Common utility functions for COPY readers. */
 public final class PgCopyUtils {
@@ -155,6 +157,20 @@ public final class PgCopyUtils {
                 case STRING:
                     return raw;
                 case BOOLEAN:
+                    if ("t".equalsIgnoreCase(raw)
+                            || "true".equalsIgnoreCase(raw)
+                            || "y".equalsIgnoreCase(raw)
+                            || "yes".equalsIgnoreCase(raw)
+                            || "1".equals(raw)) {
+                        return true;
+                    }
+                    if ("f".equalsIgnoreCase(raw)
+                            || "false".equalsIgnoreCase(raw)
+                            || "n".equalsIgnoreCase(raw)
+                            || "no".equalsIgnoreCase(raw)
+                            || "0".equals(raw)) {
+                        return false;
+                    }
                     return Boolean.valueOf(raw);
                 case TINYINT:
                     return Byte.valueOf(raw);
@@ -175,7 +191,7 @@ public final class PgCopyUtils {
                 case TIME:
                     return Time.valueOf(raw).toLocalTime();
                 case TIMESTAMP:
-                    return Timestamp.valueOf(raw).toLocalDateTime();
+                    return parseTimestamp(raw);
                 case BYTES:
                     if (raw.length() >= 3
                             && raw.charAt(0) == '\\'
@@ -200,5 +216,55 @@ public final class PgCopyUtils {
                     "Failed to parse CSV field for type: " + type,
                     e);
         }
+    }
+
+    /**
+     * PostgreSQL COPY TO CSV renders timestamp with time zone as e.g. {@code 2023-05-07
+     * 06:30:00+00}, which {@link Timestamp#valueOf(String)} cannot parse because of the trailing
+     * offset. Fall back to ISO offset parsing in that case.
+     */
+    private static LocalDateTime parseTimestamp(String raw) {
+        try {
+            return Timestamp.valueOf(raw).toLocalDateTime();
+        } catch (IllegalArgumentException e) {
+            String normalized = normalizeOffset(raw.trim().replace(' ', 'T'));
+            try {
+                return OffsetDateTime.parse(normalized).toLocalDateTime();
+            } catch (DateTimeParseException ignored) {
+                try {
+                    return LocalDateTime.parse(normalized);
+                } catch (DateTimeParseException ignoredAgain) {
+                    throw e;
+                }
+            }
+        }
+    }
+
+    /**
+     * Java 8's ISO offset parser only accepts offsets with a colon (e.g. {@code +08:00}).
+     * PostgreSQL renders {@code +08} / {@code +0000}, so add the missing colon before parsing.
+     */
+    private static String normalizeOffset(String value) {
+        int len = value.length();
+        if (len >= 5 && isOffsetSign(value.charAt(len - 5)) && isDigit(value, len - 4, len)) {
+            return value.substring(0, len - 2) + ":" + value.substring(len - 2);
+        }
+        if (len >= 3 && isOffsetSign(value.charAt(len - 3)) && isDigit(value, len - 2, len)) {
+            return value + ":00";
+        }
+        return value;
+    }
+
+    private static boolean isOffsetSign(char c) {
+        return c == '+' || c == '-';
+    }
+
+    private static boolean isDigit(String value, int from, int to) {
+        for (int i = from; i < to; i++) {
+            if (!Character.isDigit(value.charAt(i))) {
+                return false;
+            }
+        }
+        return true;
     }
 }

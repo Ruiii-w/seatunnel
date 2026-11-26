@@ -314,10 +314,10 @@ public class FixedChunkSplitter extends ChunkSplitter {
             }
         }
         String splitQuery = split.getSplitQuery();
-        // 半开区间：>= start AND < end
+        // 闭区间：>= start AND <= end（分片边界连续，end_i + 1 = start_{i+1}，不会重复）
         String condition =
                 String.format(
-                        "%s >= %s AND %s < %s",
+                        "%s >= %s AND %s <= %s",
                         splitKeyName,
                         String.valueOf(split.getSplitStart()),
                         splitKeyName,
