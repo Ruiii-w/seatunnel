@@ -20,6 +20,7 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.io.Serializable;
+import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -65,10 +66,17 @@ public class JdbcInputFormat implements Serializable {
     public void openInputFormat() {}
 
     public void closeInputFormat() throws IOException {
-        close();
-
-        if (chunkSplitter != null) {
-            chunkSplitter.close();
+        try {
+            close();
+        } finally {
+            // Ensure ChunkSplitter connection is closed even if close() throws
+            if (chunkSplitter != null) {
+                try {
+                    chunkSplitter.close();
+                } catch (Exception e) {
+                    LOG.warn("Failed to close chunkSplitter", e);
+                }
+            }
         }
     }
 
@@ -132,6 +140,15 @@ public class JdbcInputFormat implements Serializable {
             }
         }
         if (statement != null) {
+            try {
+                // Explicitly close underlying Connection before closing Statement
+                Connection conn = statement.getConnection();
+                if (conn != null && !conn.isClosed()) {
+                    conn.close();
+                }
+            } catch (SQLException e) {
+                LOG.info("Connection couldn't be closed - " + e.getMessage());
+            }
             try {
                 statement.close();
             } catch (SQLException e) {

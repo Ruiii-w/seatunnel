@@ -50,7 +50,7 @@ public class DorisCommitter implements SinkCommitter<DorisCommitInfo> {
     int maxRetry;
 
     public DorisCommitter(DorisConfig dorisConfig) {
-        this(dorisConfig, new HttpUtil().getHttpClient());
+        this(dorisConfig, HttpUtil.getSharedHttpClient());
     }
 
     public DorisCommitter(DorisConfig dorisConfig, CloseableHttpClient client) {

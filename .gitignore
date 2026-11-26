@@ -56,8 +56,12 @@ spark-warehouse
 /lib/*
 version.properties
 
-# dump log directory
+# dump log analysis
 dump_log/
+dump_log2/
+
+# seatunnel runtime test configs
+.seatunnel-home-test/
 
 # tmp log files
 tmp.log

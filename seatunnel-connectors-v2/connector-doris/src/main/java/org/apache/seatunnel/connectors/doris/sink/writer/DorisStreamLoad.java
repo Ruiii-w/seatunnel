@@ -86,6 +86,29 @@ public class DorisStreamLoad implements Serializable {
     private String label;
     @Getter private long recordCount = 0;
 
+    // ===== Global shared upload executor (single pool for all writers) =====
+    private static volatile ThreadPoolExecutor SHARED_UPLOAD_EXECUTOR;
+
+    private static synchronized ThreadPoolExecutor getSharedUploadExecutor() {
+        if (SHARED_UPLOAD_EXECUTOR == null || SHARED_UPLOAD_EXECUTOR.isShutdown()) {
+            SHARED_UPLOAD_EXECUTOR =
+                    new ThreadPoolExecutor(
+                            20,
+                            100,
+                            60L,
+                            TimeUnit.SECONDS,
+                            new LinkedBlockingQueue<>(200),
+                            new ThreadFactoryBuilder()
+                                    .setNameFormat("stream-load-upload-%d")
+                                    .setDaemon(true)
+                                    .build(),
+                            new ThreadPoolExecutor.CallerRunsPolicy());
+            // Allow core threads to time out when idle, avoiding permanent thread retention
+            SHARED_UPLOAD_EXECUTOR.allowCoreThreadTimeOut(true);
+        }
+        return SHARED_UPLOAD_EXECUTOR;
+    }
+
     public DorisStreamLoad(
             String hostPort,
             TablePath tablePath,
@@ -105,14 +128,8 @@ public class DorisStreamLoad implements Serializable {
         this.streamLoadProp.putAll(dorisConfig.getStreamLoadProps());
         this.enableDelete = dorisConfig.getEnableDelete();
         this.httpClient = httpClient;
-        this.executorService =
-                new ThreadPoolExecutor(
-                        1,
-                        1,
-                        0L,
-                        TimeUnit.MILLISECONDS,
-                        new LinkedBlockingQueue<>(),
-                        new ThreadFactoryBuilder().setNameFormat("stream-load-upload").build());
+        // Use globally shared upload executor pool (single JVM-wide pool for all writers)
+        this.executorService = getSharedUploadExecutor();
         this.recordStream =
                 new RecordStream(dorisConfig.getBufferSize(), dorisConfig.getBufferCount());
         lineDelimiter =
@@ -328,15 +345,7 @@ public class DorisStreamLoad implements Serializable {
     }
 
     public void close() throws IOException {
-        if (null != httpClient) {
-            try {
-                httpClient.close();
-            } catch (IOException e) {
-                throw new IOException("Closing httpClient failed.", e);
-            }
-        }
-        if (null != executorService) {
-            executorService.shutdownNow();
-        }
+        // Shared httpClient: lifecycle managed globally by HttpUtil, do NOT close here
+        // Shared executorService: lifecycle managed globally, do NOT shutdown here
     }
 }

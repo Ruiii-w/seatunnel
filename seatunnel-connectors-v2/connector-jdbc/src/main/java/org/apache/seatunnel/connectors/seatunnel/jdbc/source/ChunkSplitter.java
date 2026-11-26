@@ -81,7 +81,12 @@ public abstract class ChunkSplitter implements AutoCloseable, Serializable {
     @Override
     public synchronized void close() {
         if (connectionProvider != null) {
-            connectionProvider.closeConnection();
+            try {
+                connectionProvider.closeConnection();
+                log.debug("JDBC connection provider closed for table splitting");
+            } catch (Exception e) {
+                log.warn("Failed to close JDBC connection provider", e);
+            }
         }
     }
 

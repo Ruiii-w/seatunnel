@@ -45,6 +45,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 
@@ -57,6 +58,10 @@ public class DorisSinkWriter
     private static final int INITIAL_DELAY = 200;
     private static final List<String> DORIS_SUCCESS_STATUS =
             new ArrayList<>(Arrays.asList(LoadStatus.SUCCESS, LoadStatus.PUBLISH_TIMEOUT));
+
+    // Shared check scheduler across all writers to avoid DelayedWorkQueue fragmentation
+    private static volatile ScheduledExecutorService SHARED_CHECK_EXECUTOR;
+
     private long lastCheckpointId;
     private DorisStreamLoad dorisStreamLoad;
     private final DorisConfig dorisConfig;
@@ -66,7 +71,20 @@ public class DorisSinkWriter
     private final DorisSerializer serializer;
     private final CatalogTable catalogTable;
     private final ScheduledExecutorService scheduledExecutorService;
+    private ScheduledFuture<?> checkFuture;
     private volatile Exception loadException = null;
+
+    private static synchronized ScheduledExecutorService getSharedCheckExecutor() {
+        if (SHARED_CHECK_EXECUTOR == null || SHARED_CHECK_EXECUTOR.isShutdown()) {
+            SHARED_CHECK_EXECUTOR =
+                    new ScheduledThreadPoolExecutor(
+                            2,
+                            new ThreadFactoryBuilder().setNameFormat("stream-load-check").build());
+            // Immediately remove cancelled tasks from DelayedWorkQueue to prevent memory leak
+            ((ScheduledThreadPoolExecutor) SHARED_CHECK_EXECUTOR).setRemoveOnCancelPolicy(true);
+        }
+        return SHARED_CHECK_EXECUTOR;
+    }
 
     public DorisSinkWriter(
             SinkWriter.Context context,
@@ -88,9 +106,7 @@ public class DorisSinkWriter
                         + "_"
                         + context.getIndexOfSubtask();
         this.labelGenerator = new LabelGenerator(labelPrefix, dorisConfig.getEnable2PC());
-        this.scheduledExecutorService =
-                new ScheduledThreadPoolExecutor(
-                        1, new ThreadFactoryBuilder().setNameFormat("stream-load-check").build());
+        this.scheduledExecutorService = getSharedCheckExecutor();
         this.serializer = createSerializer(dorisConfig, catalogTable.getSeaTunnelRowType());
         this.intervalTime = dorisConfig.getCheckInterval();
         this.initializeLoad();
@@ -105,7 +121,7 @@ public class DorisSinkWriter
                             catalogTable.getTablePath(),
                             dorisConfig,
                             labelGenerator,
-                            new HttpUtil().getHttpClient());
+                            HttpUtil.getSharedHttpClient());
             if (dorisConfig.getEnable2PC()) {
                 dorisStreamLoad.abortPreCommit(labelPrefix, lastCheckpointId + 1);
             }
@@ -115,8 +131,9 @@ public class DorisSinkWriter
         startLoad(labelGenerator.generateLabel(lastCheckpointId + 1));
         // when uploading data in streaming mode, we need to regularly detect whether there are
         // exceptions.
-        scheduledExecutorService.scheduleWithFixedDelay(
-                this::checkDone, INITIAL_DELAY, intervalTime, TimeUnit.MILLISECONDS);
+        this.checkFuture =
+                scheduledExecutorService.scheduleWithFixedDelay(
+                        this::checkDone, INITIAL_DELAY, intervalTime, TimeUnit.MILLISECONDS);
     }
 
     @Override
@@ -208,12 +225,17 @@ public class DorisSinkWriter
 
     @Override
     public void close() throws IOException {
+        // Step 1: Cancel periodic check task to prevent new checkDone triggers
+        // and release the ScheduledFuture reference held in DelayedWorkQueue
+        if (checkFuture != null && !checkFuture.isDone()) {
+            checkFuture.cancel(false);
+            checkFuture = null;
+        }
+        // Step 2: Flush remaining data using shared HttpClient
         if (!dorisConfig.getEnable2PC()) {
             flush();
         }
-        if (scheduledExecutorService != null) {
-            scheduledExecutorService.shutdownNow();
-        }
+        // Step 3: Close DorisStreamLoad (no longer closes shared HttpClient or shared executor)
         if (dorisStreamLoad != null) {
             dorisStreamLoad.close();
         }
